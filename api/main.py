@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import psycopg  # noqa: E402
 from fastapi import FastAPI, HTTPException, Query  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
@@ -99,6 +100,35 @@ app.add_middleware(
 )
 
 
+def dbc():
+    """A live connection, reconnecting if the server dropped it.
+
+    Managed Postgres suspends an idle compute (Neon does so after ~5 minutes on
+    the free tier) and closes the socket. A single connection opened at startup
+    therefore goes stale the first time the demo is left alone, and every
+    request after that fails until the service is redeployed — the deployment
+    would look fine for five minutes and be broken thereafter.
+
+    One `SELECT 1` per request is cheap when the API and the database are in the
+    same region, which is why render.yaml pins Ohio to match Neon's us-east-2.
+    """
+    c = STATE.get("conn")
+    try:
+        if c is None or c.closed:
+            raise psycopg.OperationalError("no connection")
+        with c.cursor() as cur:
+            cur.execute("SELECT 1")
+        return c
+    except psycopg.Error:
+        if c is not None:
+            try:
+                c.close()
+            except Exception:
+                pass
+        STATE["conn"] = c = db.connect(autocommit=True)
+        return c
+
+
 def summary(row: dict) -> PossessionSummary:
     return PossessionSummary(
         possession_uid=row["possession_uid"], match_id=row["match_id"],
@@ -132,7 +162,8 @@ def parse_freeze_frame(ff) -> list:
 
 @app.get("/health")
 def health():
-    with STATE["conn"].cursor() as cur:
+    conn = dbc()
+    with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM possessions")
         n = cur.fetchone()[0]
     return {"ok": True, "possessions": n,
@@ -221,14 +252,15 @@ def search(
                     end_zone=end_zone, must_include=must_include or [], min_xg=min_xg,
                     min_events=min_events, ended_in_shot=ended_in_shot,
                     ended_in_goal=ended_in_goal)
+    conn = dbc()
     t0 = time.perf_counter()
-    out = STATE["retriever"].search(STATE["conn"], sequence_hint=sequence_hint,
+    out = STATE["retriever"].search(conn, sequence_hint=sequence_hint,
                                     filters=f, limit=limit,
                                     # The deployment flag is authoritative: with
                                     # PITCHQUERY_DENSE=0 a caller cannot force a
                                     # MiniLM load onto a box that can't afford it.
                                     use_dense=use_dense and _dense_on())
-    rows = hydrate(STATE["conn"], out["results"])
+    rows = hydrate(conn, out["results"])
     return SearchResponse(
         results=[summary(r) for r in rows],
         n_candidates=out["n_candidates"],
@@ -265,9 +297,10 @@ def shape(
 
     f = Filters(team=team, competition=competition, play_pattern=play_pattern,
                 ended_in_shot=ended_in_shot, ended_in_goal=ended_in_goal, min_xg=min_xg)
+    conn = dbc()
     t0 = time.perf_counter()
-    out = STATE["retriever"].by_shape(STATE["conn"], drawn, filters=f, limit=limit)
-    rows = hydrate(STATE["conn"], out["results"])
+    out = STATE["retriever"].by_shape(conn, drawn, filters=f, limit=limit)
+    rows = hydrate(conn, out["results"])
     return SearchResponse(
         results=[summary(r) for r in rows],
         n_candidates=out["n_matched"],
@@ -282,13 +315,14 @@ def shape(
 @app.get("/similar/{uid:path}", response_model=SearchResponse)
 def similar(uid: str, limit: int = Query(20, ge=1, le=100), use_dense: bool = True):
     """'More like this' — no query language and no LLM, just the seed's vectors."""
+    conn = dbc()
     t0 = time.perf_counter()
     try:
-        out = STATE["retriever"].similar(STATE["conn"], uid, limit=limit,
+        out = STATE["retriever"].similar(conn, uid, limit=limit,
                                          use_dense=use_dense and _dense_on())
     except KeyError:
         raise HTTPException(404, f"{uid} is not in the index")
-    rows = hydrate(STATE["conn"], out["results"])
+    rows = hydrate(conn, out["results"])
     return SearchResponse(
         results=[summary(r) for r in rows],
         n_candidates=len(STATE["retriever"].uids),
@@ -301,12 +335,13 @@ def similar(uid: str, limit: int = Query(20, ge=1, le=100), use_dense: bool = Tr
 @app.get("/possession/{uid:path}", response_model=PossessionDetail)
 def possession(uid: str):
     """Everything the animator needs: ordered events with coordinates."""
-    rows = hydrate(STATE["conn"], [uid])
+    conn = dbc()
+    rows = hydrate(conn, [uid])
     if not rows:
         raise HTTPException(404, f"no possession {uid}")
     row = rows[0]
 
-    with STATE["conn"].cursor() as cur:
+    with conn.cursor() as cur:
         cur.execute(
             "SELECT e.idx, e.period, e.minute, e.second, e.type, e.player, e.team, "
             "       e.x, e.y, e.end_x, e.end_y, e.duration, e.under_pressure, "
@@ -348,7 +383,7 @@ def possession(uid: str):
 @app.get("/shot/{event_id}", response_model=ShotComparison)
 def shot(event_id: str):
     """My xG and StatsBomb's, side by side, for one shot."""
-    with STATE["conn"].cursor() as cur:
+    with dbc().cursor() as cur:
         cur.execute(
             "SELECT event_id, match_id, team, player, x, y, distance, angle, body_part, "
             "       technique, shot_type, play_pattern, first_time, under_pressure, "
@@ -393,12 +428,19 @@ def meta():
     """Dropdown values for the UI. Cached in memory after the first call."""
     if "meta" in STATE:
         return STATE["meta"]
-    with STATE["conn"].cursor() as cur:
+    with dbc().cursor() as cur:
+        # Corpus counts come from the database, so a deployment that ships a
+        # subset reports what it actually has instead of a number baked into
+        # the frontend at some point in the past.
+        cur.execute("SELECT (SELECT count(*) FROM possessions), "
+                    "       (SELECT count(*) FROM matches)")
+        n_poss, n_matches = cur.fetchone()
         cur.execute("SELECT DISTINCT competition FROM possessions ORDER BY 1")
         comps = [r[0] for r in cur.fetchall()]
         cur.execute("SELECT team, count(*) FROM possessions GROUP BY 1 ORDER BY 2 DESC")
         teams = [r[0] for r in cur.fetchall()]
         cur.execute("SELECT DISTINCT play_pattern FROM possessions ORDER BY 1")
         patterns = [r[0] for r in cur.fetchall()]
-    STATE["meta"] = {"competitions": comps, "teams": teams, "play_patterns": patterns}
+    STATE["meta"] = {"competitions": comps, "teams": teams, "play_patterns": patterns,
+                     "possessions": n_poss, "matches": n_matches}
     return STATE["meta"]

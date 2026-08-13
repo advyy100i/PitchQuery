@@ -80,7 +80,13 @@ export type Filters = {
   end_band?: string;
 };
 
-export type Meta = { competitions: string[]; teams: string[]; play_patterns: string[] };
+export type Meta = {
+  competitions: string[];
+  teams: string[];
+  play_patterns: string[];
+  possessions: number;
+  matches: number;
+};
 
 function qs(params: Record<string, unknown>): string {
   const u = new URLSearchParams();

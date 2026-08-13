@@ -41,7 +41,7 @@ const serif = Newsreader({
 export const metadata: Metadata = {
   title: "PitchQuery — tactical possession search",
   description:
-    "Search 66,817 football possessions by tactical pattern. Built on StatsBomb open data.",
+    "Search football possessions by tactical pattern. Built on StatsBomb open data.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

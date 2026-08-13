@@ -4,6 +4,10 @@
 # The frontend is NOT here — it goes to Vercel, which is free and purpose-built
 # for Next.js. This deploys the FastAPI service only.
 #
+# Region is pinned to Ohio to sit next to a Neon us-east-2 database. A
+# cross-region pair adds ~60 ms to every query, and these endpoints make
+# several.
+#
 # Two environment variables must be set by hand in the Render dashboard because
 # they carry a secret or a URL that does not exist yet (`sync: false` below
 # means "prompt me, do not read from this file"):
@@ -19,7 +23,7 @@ services:
     name: pitchquery-api
     runtime: python
     plan: free
-    region: oregon
+    region: ohio
     buildCommand: pip install -r requirements-api.txt
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health

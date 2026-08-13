@@ -101,8 +101,10 @@ export default function Page() {
           </p>
         </div>
         <dl className="stats">
-          <div><dt>Possessions</dt><dd>66,817</dd></div>
-          <div><dt>Matches</dt><dd>431</dd></div>
+          <div><dt>Possessions</dt>
+            <dd>{meta ? meta.possessions.toLocaleString() : "—"}</dd></div>
+          <div><dt>Matches</dt>
+            <dd>{meta ? meta.matches.toLocaleString() : "—"}</dd></div>
           <div><dt>Teams</dt><dd>{meta ? meta.teams.length : "—"}</dd></div>
         </dl>
       </header>
