@@ -236,21 +236,3 @@ StatsBomb's side by side), `GET /meta`.
 Raw JSON is cached under `PITCHQUERY_DATA` (default `~/pitchquery-data`), which is
 deliberately outside any cloud-synced folder.
 
-## Cost
-
-**Zero.** Everything runs locally: the data is a public static repo, and
-Postgres, pgvector, LightGBM, sentence-transformers and the rest are open source
-and CPU-only. There is no GPU anywhere and no API key of any kind.
-
-The plan called for an LLM query planner, which would have been the one paid
-dependency. It was replaced by the rule parser in `core/planner.py`, which is
-free, runs in ~1 ms with no network call, is deterministic (the same sentence
-always produces the same query, so a retrieval regression is never the
-planner's fault), and — unlike a model — can show the user exactly which phrase
-produced which filter, and which words it failed to understand.
-
-The trade is real and is measured rather than asserted: the parser only knows
-the vocabulary written into it. It has no alias table, so "PSG" is not a team;
-an LLM would resolve that. `docs/planner_eval.md` reports the cost of that trade
-alongside the benefit, including a held-out paraphrase set that tests whether
-the rules generalise beyond the sentences they were written against.
