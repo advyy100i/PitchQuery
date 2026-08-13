@@ -1,39 +1,49 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, IBM_Plex_Sans, Newsreader } from "next/font/google";
-// @ts-expect-error - Next.js handles CSS imports at build time.
+import localFont from "next/font/local";
 import "./globals.css";
 
 /**
  * Three families, each doing one job:
- *   Newsreader   — the wordmark and section headings. A serif gives the page an
- *                  editorial register rather than a dashboard one.
+ *   Newsreader    — the wordmark, headings and the scouting note. A serif gives
+ *                   the page an editorial register rather than a dashboard one.
  *   IBM Plex Sans — interface text. Engineered rather than neutral, which suits
- *                  a tool about measurement, and avoids the Inter/Roboto default.
+ *                   a tool about measurement, and avoids the Inter/Roboto default.
  *   IBM Plex Mono — token strings and IDs, where character alignment is
- *                  meaningful and the grammar should read as notation.
+ *                   meaningful and the grammar should read as notation.
  *
- * next/font self-hosts these at build time, so there is no external request,
- * no layout shift, and the app still works offline.
+ * These are SELF-HOSTED from app/fonts rather than pulled with
+ * next/font/google. The Google loader fetches from fonts.gstatic.com at BUILD
+ * time, which makes every production build a network call — and Vercel's build
+ * container could not reach it, so the deploy failed outright. Shipping the
+ * files makes the build hermetic: it works offline and cannot break because a
+ * font CDN is unreachable from wherever it happens to run.
+ *
+ * Latin subset only, at the weights actually used: 337 KB for all eight files.
  */
 
-const sans = IBM_Plex_Sans({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+const sans = localFont({
+  src: [
+    { path: "./fonts/IBMPlexSans-Regular.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/IBMPlexSans-Medium.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/IBMPlexSans-SemiBold.woff2", weight: "600", style: "normal" },
+  ],
   variable: "--font-sans",
   display: "swap",
 });
 
-const mono = IBM_Plex_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500"],
+const mono = localFont({
+  src: [{ path: "./fonts/IBMPlexMono-Regular.woff2", weight: "400", style: "normal" }],
   variable: "--font-mono",
   display: "swap",
 });
 
-const serif = Newsreader({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  style: ["normal", "italic"],
+const serif = localFont({
+  src: [
+    { path: "./fonts/Newsreader-Regular.woff2", weight: "400", style: "normal" },
+    { path: "./fonts/Newsreader-RegularItalic.woff2", weight: "400", style: "italic" },
+    { path: "./fonts/Newsreader-Medium.woff2", weight: "500", style: "normal" },
+    { path: "./fonts/Newsreader-SemiBold.woff2", weight: "600", style: "normal" },
+  ],
   variable: "--font-serif",
   display: "swap",
 });
