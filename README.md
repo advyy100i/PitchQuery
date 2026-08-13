@@ -6,8 +6,7 @@ animated clips, with a scouting note whose every claim links to the clips it was
 computed from.
 
 **[pitch-query.vercel.app](https://pitch-query.vercel.app)** ·
-[API](https://pitchquery-api.onrender.com/health) ·
-
+[API](https://pitchquery-api.onrender.com/health)
 
 > The hosted API sleeps after 15 minutes idle and takes ~50 s to wake. Open
 > [`/health`](https://pitchquery-api.onrender.com/health) first if you want it
