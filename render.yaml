@@ -37,10 +37,12 @@ services:
       - key: PITCHQUERY_DENSE
         value: "0"
 
-      # Caching 67k zone paths costs ~50 MB resident. On a 512 MB box, let the
-      # first drawn query build it (~600 ms once) instead of paying at boot.
+      # Cache the 67k zone paths at boot. Measured resident memory with it
+      # loaded is 277 MB, well inside the 512 MB limit, and building it lazily
+      # instead makes the first drawn query pay for fetching 67k rows from the
+      # database — which is several seconds a user would sit through.
       - key: PITCHQUERY_PRELOAD_SHAPES
-        value: "0"
+        value: "1"
 
       - key: DATABASE_URL
         sync: false
