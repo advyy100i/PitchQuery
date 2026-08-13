@@ -3,7 +3,15 @@
 Type a description of a passage of play in English, get back ranked animated
 clips of possessions that match, plus a generated scouting note.
 
-## The three numbers (fill in at the end)
+**Live:** <https://pitch-query.vercel.app> · API <https://pitchquery-api.onrender.com/health>
+
+The hosted instance carries the whole corpus — 66,817 possessions from 431
+matches — and runs the sparse ranker only, because the dense one needs torch and
+torch does not fit a free tier. `/health` reports which mode it is in. The API
+sleeps after 15 minutes idle and takes about 50 seconds to wake; everything
+after that is fast.
+
+## The three numbers
 
 1. Search over **66,817** possessions from **431** matches, precision@5 of
    **0.608** on a 30-query evaluation set, p95 latency **58** ms.
@@ -101,7 +109,8 @@ the box: sparse 0.0, dense 1.0).
 ## Deploying
 
 **Vercel** for the frontend, **Render** for the API, **Neon** for Postgres —
-all three free, no card required for any of them.
+all three free, no card required for any of them. This is what the live links
+above are running on; the steps below are what it took.
 
 Everything about this split follows from one measurement. The local database is
 3.7 GB, of which 1.35 GB is raw StatsBomb JSONB and 98 MB is MiniLM vectors.
@@ -159,7 +168,7 @@ Import the repo on Vercel, set **Root Directory** to `web`, and add one
 environment variable:
 
 ```
-NEXT_PUBLIC_API_URL = https://your-api.onrender.com
+NEXT_PUBLIC_API_URL = https://pitchquery-api.onrender.com
 ```
 
 Then go back and set `PITCHQUERY_CORS_ORIGINS` on Render to the Vercel URL.
@@ -172,6 +181,12 @@ Render free web services sleep after 15 minutes idle and take **~50 seconds** to
 wake. That is fine for a link someone opens once, and bad in a live interview —
 open the API's `/health` a minute before you demo. Neon suspends compute too but
 resumes in well under a second.
+
+## Architecture
+
+`ARCHITECTURE.txt` has the full picture: an ASCII diagram of the pipeline, the
+deployed topology, what crosses each boundary, the three query paths, where
+every number in this README comes from, and what is deliberately absent.
 
 ## Data source
 
@@ -191,7 +206,8 @@ StatsBomb is credited here, in the web app footer, and on every exported chart.
 - [x] Phase 6 — query planner (`docs/planner_eval.md`) — **rule-based, no LLM**
 - [x] Draw-a-shape search (`GET /shape`) — retrieval with no text and no model
 - [x] Scouting notes with uncheatable citations (`core/notes.py`)
-- [ ] Phase 8 — ship
+- [x] Phase 8 — shipped: Vercel + Render + Neon, all on free tiers
+- [ ] Length normalisation in the ranker (see the known defect above)
 
 ## Setup
 

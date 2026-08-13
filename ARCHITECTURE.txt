@@ -1,0 +1,252 @@
+================================================================================
+PITCHQUERY — ARCHITECTURE
+Tactical possession search over StatsBomb open football data.
+================================================================================
+
+This file describes the system as a diagram plus the reasoning behind each
+boundary. It is written to be read on its own, and to be enough to redraw the
+diagram in any tool without opening the code.
+
+
+--------------------------------------------------------------------------------
+1. THE ONE-SCREEN PICTURE
+--------------------------------------------------------------------------------
+
+                       ┌───────────────────────────────┐
+   raw JSON on GitHub  │  StatsBomb Open Data          │
+   (public, no key)    │  competitions / matches /     │
+                       │  events / lineups             │
+                       └───────────────┬───────────────┘
+                                       │  HTTPS, cached to disk, selective
+                                       ▼
+   ┌────────────────────────────────────────────────────────────────────────┐
+   │ INGEST  (offline, run once)                                            │
+   │                                                                        │
+   │  02_fetch          selective download, skips what is already cached     │
+   │  03_load_events    → matches, events, shots   (idempotent upsert)       │
+   │                    computes shot geometry + freeze-frame features       │
+   │                    computes each event's grammar token                  │
+   │  04_build_possess. groups by (match_id, possession) → token strings     │
+   │  05_embed          TF-IDF fit → pickle;  MiniLM → pgvector              │
+   └───────────────────────────────┬────────────────────────────────────────┘
+                                   ▼
+                    ┌──────────────────────────────┐
+                    │  POSTGRES 16 + pgvector      │
+                    │                              │
+                    │  matches       431           │
+                    │  events        1.60 M        │
+                    │  shots         11,185        │
+                    │  possessions   66,817        │
+                    └───────┬──────────────┬───────┘
+                            │              │
+              ┌─────────────┘              └──────────────┐
+              ▼                                           ▼
+   ┌────────────────────────┐                  ┌──────────────────────────┐
+   │ RETRIEVAL              │                  │ MODELLING                │
+   │                        │                  │                          │
+   │ SQL filter (hard)      │                  │ baseline  logistic on    │
+   │   ↓                    │                  │           distance+angle │
+   │ ├ sparse  TF-IDF 1-3gr │                  │ mine      LightGBM +     │
+   │ ├ dense   MiniLM/pgvec │                  │           freeze-frame   │
+   │ └ shape   zone_path    │                  │ statsbomb the ceiling    │
+   │   ↓                    │                  │                          │
+   │ RRF fusion             │                  │ split by competition,    │
+   └───────────┬────────────┘                  │ never by shot            │
+               │                               └──────────┬───────────────┘
+               │                                          │
+               ▼                                          ▼
+   ┌────────────────────────┐                  ┌──────────────────────────┐
+   │ core/planner.py        │                  │ docs/benchmark.md        │
+   │ English → filters      │                  │ calibration.png          │
+   │ rules, no LLM, ~1 ms   │                  └──────────────────────────┘
+   └───────────┬────────────┘
+               ▼
+   ┌────────────────────────┐     ┌──────────────────────────────────────┐
+   │ core/notes.py          │     │ EVALUATION                           │
+   │ claims computed FROM   │     │ eval/queries.yaml   30 queries        │
+   │ the clips they cite    │     │ eval/judge.py       rubrics as code   │
+   └───────────┬────────────┘     │ eval/audit.py       blind human check │
+               ▼                  │ eval/score_*.py     P@5 / MRR / ms    │
+   ┌────────────────────────┐     └──────────────────────────────────────┘
+   │ api/main.py  FastAPI   │
+   │ /search /shape /plan   │
+   │ /similar /possession   │
+   │ /shot /meta /health    │
+   └───────────┬────────────┘
+               ▼
+   ┌────────────────────────┐
+   │ web/  Next.js          │
+   │ SVG pitch animator,    │
+   │ shape picker, notes    │
+   └────────────────────────┘
+
+
+--------------------------------------------------------------------------------
+2. DEPLOYED TOPOLOGY
+--------------------------------------------------------------------------------
+
+        browser
+           │  https
+           ▼
+   ┌───────────────────┐        ┌──────────────────────┐      ┌──────────────┐
+   │ VERCEL            │  CORS  │ RENDER               │ SSL  │ NEON         │
+   │ Next.js static +  │───────▶│ FastAPI (free, Ohio) │─────▶│ Postgres 18  │
+   │ RSC, Hobby plan   │        │ 512 MB RAM cap       │      │ free, 0.5 GB │
+   │                   │        │                      │      │ us-east-2    │
+   │ NEXT_PUBLIC_API_  │        │ DATABASE_URL         │      │ 424 MB used  │
+   │ URL               │        │ PITCHQUERY_CORS_ORI. │      │              │
+   │                   │        │ PITCHQUERY_DENSE=0   │      │              │
+   └───────────────────┘        └──────────────────────┘      └──────────────┘
+
+   Three deliberate choices:
+
+   * Render is pinned to Ohio to sit beside Neon's us-east-2. A cross-region
+     pair adds ~60 ms to every query and these endpoints issue several.
+
+   * The API holds no long-lived connection. Managed Postgres suspends idle
+     compute and closes the socket, so every request takes its connection
+     through a liveness check that reconnects when the server has gone away.
+     Without it the demo works, sits idle for five minutes, and then fails
+     every request until redeployed.
+
+   * No build artefact is uploaded. The TF-IDF index is fitted from the
+     database at startup (~2 s), so it cannot drift from the data it indexes.
+
+
+--------------------------------------------------------------------------------
+3. WHAT CROSSES EACH BOUNDARY
+--------------------------------------------------------------------------------
+
+  StatsBomb → ingest      ~1.4 GB of JSON, fetched once, cached on disk.
+                          Never fetched again; the pipeline is re-runnable
+                          offline.
+
+  ingest → Postgres       Normalised rows plus the raw JSONB kept alongside,
+                          so features can be added later without re-downloading.
+
+  Postgres → retrieval    Hard filters run in SQL and return candidate IDs.
+                          Ranking happens in Python over an in-memory matrix.
+                          Filter-then-rank, never the reverse: ranking first
+                          and filtering after means a query for one team's
+                          corners returns another team's open play.
+
+  retrieval → API         Ranked possession UIDs, hydrated to display rows.
+
+  API → browser           JSON only. The pitch is drawn client-side from
+                          event coordinates; no images are generated server-side.
+
+  local → hosted          A slim copy: raw JSONB, embeddings and the tsvector
+                          are left behind. 3.7 GB becomes 424 MB, which is why
+                          the hosted demo carries the entire corpus instead of
+                          a subset.
+
+
+--------------------------------------------------------------------------------
+4. THE THREE QUERY PATHS
+--------------------------------------------------------------------------------
+
+  A. ENGLISH        "right-wing cross into the box that ends in a shot"
+                       │
+                       ▼  core/planner.py — rules, ~1 ms, no model
+                    filters {ended_in_shot: true}
+                    hint    PASS@M-R+ RECV@F-R CARRY@F-R CROSS@F-R> …
+                       │
+                       ▼  SQL filter → sparse (+ dense locally) → RRF
+
+  B. TOKENS         the hint written by hand, same path from that point on.
+
+  C. SHAPE          zones clicked on the pitch: D-C → M-C → F-RI → F-C
+                       │
+                       ▼  core/retrieval.by_shape
+                    reduce each possession's zone_path (collapse repeats),
+                    keep those containing the drawn path in order,
+                    rank by COVERAGE = len(shape) / len(reduced path)
+                       │
+                       ▼  no text, no vectors, no model at all — ~30 ms
+
+  All three converge on the same hydrate step and the same scouting note.
+
+
+--------------------------------------------------------------------------------
+5. WHERE EACH NUMBER COMES FROM
+--------------------------------------------------------------------------------
+
+  P@5 0.608 (fused)       eval/score_retrieval.py, 25 discriminating queries,
+                          relevance from eval/judge.py rubrics written before
+                          any results were seen. 87% agreement with a human on
+                          a blind 71-item audit (eval/audit.py).
+
+  xG 76% gap closed       models/evaluate_xg.py. Held out the 2022 World Cup
+                          and 2023 Women's World Cup entirely. Split by
+                          competition, never by shot: shots inside one match
+                          share a game state and a shooter, and a random shot
+                          split leaks.
+
+  planner 1 ms            eval/score_planner.py, plus a held-out paraphrase
+                          set so the rules are not merely fitted to the 30
+                          sentences they were written against.
+
+
+--------------------------------------------------------------------------------
+6. THINGS THAT ARE DELIBERATELY ABSENT
+--------------------------------------------------------------------------------
+
+  No LLM anywhere.        The plan specified one for query planning and for
+                          scouting notes. Both are rules instead: free,
+                          deterministic, inspectable, and measured against the
+                          hand-written baseline rather than assumed better.
+
+  No fake player dots.    Positions are drawn only where a real freeze frame
+                          exists — the moment of a shot. Everywhere else the
+                          ball moves alone and the UI says why.
+
+  No statsbomb_xg as a    It is the comparison column and never a feature.
+  feature.                The training SELECT lists columns explicitly so a
+                          later `SELECT *` cannot leak it in.
+
+  No dense ranker hosted. torch is ~2.5 GB installed and takes resident memory
+                          from 252 MB to 570 MB, past Render's 512 MB. /health
+                          reports "sparse only" rather than implying fusion.
+
+
+--------------------------------------------------------------------------------
+7. KNOWN DEFECT
+--------------------------------------------------------------------------------
+
+  Short possessions are over-retrieved. TF-IDF vectors are L2-normalised, so a
+  3-token possession whose every token matches scores near-perfectly, while a
+  20-token possession containing the same passage plus its build-up is diluted.
+  Across the top 5 for all 30 parsed queries the median possession is 6 tokens
+  against a corpus median of 13.
+
+  This inflates the headline P@5, because most rubrics test for the presence of
+  tokens rather than for the possession being a substantial passage of play.
+  The fix is length normalisation in the ranker (BM25's `b`, or a length floor)
+  and a re-run of every eval. Until then the retrieval numbers should be read
+  as an upper bound.
+
+  Shape search does not have this problem: it never uses cosine similarity, and
+  ties break on event count.
+
+
+--------------------------------------------------------------------------------
+8. FILE MAP
+--------------------------------------------------------------------------------
+
+  ingest/     00 inventory · 01 probes · 02 fetch · 03 load · 04 possessions
+              · 05 embed
+  core/       zones (grid + grammar) · features (shot geometry) · retrieval
+              (filters, sparse, dense, shape, RRF) · planner (English → query)
+              · notes (cited claims) · db · config
+  models/     train_xg · evaluate_xg
+  eval/       queries.yaml · paraphrases.yaml · judge · audit · score_retrieval
+              · score_planner
+  api/        main (FastAPI) · schemas
+  web/        app/ (page, layout, globals.css) · components/ (Pitch,
+              ShapePicker, QueryBar, ResultCard, ScoutingNote) · lib/api.ts
+  deploy/     schema_deploy.sql · export_to_neon.py
+  sql/        001_schema · 002_indexes
+  tests/      test_notes (citations cannot be wrong) · test_shape
+
+  Data source: StatsBomb Open Data, used under their open-data licence.
+================================================================================
