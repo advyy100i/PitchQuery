@@ -13,7 +13,11 @@ Backend Deployed on: [API](https://pitchquery-api.onrender.com/health)
 > [`/health`](https://pitchquery-api.onrender.com/health) first if you want it
 > warm.
 
-![PitchQuery](docs/ui.png)
+## Video Demo
+
+https://github.com/user-attachments/assets/4093f1bf-9ba3-45d4-9c56-5f92ef6957ea
+
+
 
 ---
 
