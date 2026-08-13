@@ -42,7 +42,7 @@ pressure. That string is what gets indexed, ranked and searched.
 
 | | | how it was measured |
 |---|---|---|
-| **Retrieval** | P@5 **0.608**, MRR 0.751, p95 **58 ms** | 30 queries, relevance from per-query rubrics written *before* any results were seen; **87% agreement** with a human on a blind 71-item audit |
+| **Retrieval** | P@5 **0.608**, MRR 0.751, p50 36 ms / p95 123 ms | 30 queries, relevance from per-query rubrics written *before* any results were seen; **87% agreement** with a human on a blind 71-item audit |
 | **xG model** | closes **76%** of the log-loss gap to StatsBomb's production model | held out the 2022 World Cup and 2023 Women's World Cup entirely; split by competition, never by shot |
 | **Query parsing** | **1 ms**, no LLM, no API key | 24/30 filter agreement with hand-written queries, and it holds on a held-out paraphrase set |
 
