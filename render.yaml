@@ -1,0 +1,44 @@
+# Render blueprint for the API. Create the service from this file with
+# "New > Blueprint" and point it at the repo.
+#
+# The frontend is NOT here — it goes to Vercel, which is free and purpose-built
+# for Next.js. This deploys the FastAPI service only.
+#
+# Two environment variables must be set by hand in the Render dashboard because
+# they carry a secret or a URL that does not exist yet (`sync: false` below
+# means "prompt me, do not read from this file"):
+#
+#   DATABASE_URL              the Neon connection string, including ?sslmode=require
+#   PITCHQUERY_CORS_ORIGINS   the deployed Vercel URL, e.g. https://pitchquery.vercel.app
+#
+# Set CORS after the first Vercel deploy, when you know the URL. Until then the
+# API answers curl but a browser will block the frontend's requests.
+
+services:
+  - type: web
+    name: pitchquery-api
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements-api.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.4"
+
+      # Free tier is 512 MB RAM. torch alone exceeds that, so the dense ranker
+      # is off and the API serves sparse + shape + planner. Retrieval quality
+      # drops from the fused P@5 of 0.608 to the sparse 0.544; see the README.
+      - key: PITCHQUERY_DENSE
+        value: "0"
+
+      # Caching 67k zone paths costs ~50 MB resident. On a 512 MB box, let the
+      # first drawn query build it (~600 ms once) instead of paying at boot.
+      - key: PITCHQUERY_PRELOAD_SHAPES
+        value: "0"
+
+      - key: DATABASE_URL
+        sync: false
+      - key: PITCHQUERY_CORS_ORIGINS
+        sync: false

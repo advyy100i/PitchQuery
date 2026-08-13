@@ -12,6 +12,7 @@ Run:
   uvicorn api.main:app --reload --port 8000
   open http://localhost:8000/docs
 """
+import os
 import pickle
 import sys
 import time
@@ -20,8 +21,6 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
 from fastapi import FastAPI, HTTPException, Query  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
@@ -33,9 +32,30 @@ from core.config import INDEX_DIR  # noqa: E402
 from core.notes import scouting_note  # noqa: E402
 from core.planner import Vocabulary, plan as plan_query  # noqa: E402
 from core.retrieval import Filters, Retriever, hydrate  # noqa: E402
-from core.zones import token  # noqa: E402
 
 STATE: dict = {}
+
+# --- deployment configuration -------------------------------------------------
+# All optional: the defaults are the local development setup. A hosted instance
+# sets these as environment variables.
+
+def _flag(name: str, default: bool = True) -> bool:
+    return os.getenv(name, "1" if default else "0").lower() not in ("0", "false", "no")
+
+
+# Browsers block cross-origin calls, so a deployed frontend on Vercel has to be
+# named explicitly. Comma-separated; the local dev server is always allowed.
+CORS_ORIGINS = [o.strip() for o in os.getenv(
+    "PITCHQUERY_CORS_ORIGINS",
+    "http://localhost:3000,http://127.0.0.1:3000").split(",") if o.strip()]
+
+# Dense retrieval needs torch (~2.5 GB installed, several hundred MB resident),
+# which does not fit a free hosting tier. Off there, on locally.
+DENSE_ENABLED = _flag("PITCHQUERY_DENSE", True)
+
+# Shape search caches 67k zone paths (~50 MB). Worth preloading on a machine
+# with headroom; on a 512 MB box, let the first drawn query pay for it instead.
+PRELOAD_SHAPES = _flag("PITCHQUERY_PRELOAD_SHAPES", True)
 
 # The 15 zones of the grid, for validating a drawn shape.
 VALID_ZONES = {f"{b}-{c}" for b in ("D", "M", "F")
@@ -44,15 +64,19 @@ VALID_ZONES = {f"{b}-{c}" for b in ("D", "M", "F")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    STATE["retriever"] = Retriever()
-    STATE["retriever"].model          # force the MiniLM import at boot
     STATE["conn"] = db.connect(autocommit=True)
+    # Falls back to fitting the index from the database when no pickle is
+    # present, so a deployment needs no prebuilt artefact.
+    STATE["retriever"] = Retriever(conn=STATE["conn"])
+    if DENSE_ENABLED and STATE["retriever"].dense_available:
+        STATE["retriever"].model      # pay the MiniLM import at boot, not per query
     # Team and competition names come from the data, so the parser recognises
     # exactly the entities that exist rather than a curated list that goes stale.
     STATE["vocab"] = Vocabulary.from_db(STATE["conn"])
     # Zone paths for shape search — built once so the first drawn query is as
     # fast as the hundredth.
-    STATE["retriever"].load_shapes(STATE["conn"])
+    if PRELOAD_SHAPES:
+        STATE["retriever"].load_shapes(STATE["conn"])
     try:
         with open(INDEX_DIR / "xg_models.pkl", "rb") as f:
             STATE["xg"] = pickle.load(f)
@@ -69,7 +93,7 @@ app = FastAPI(title="PitchQuery", version="0.1",
 # The Next.js dev server runs on a different origin.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["GET"],
     allow_headers=["*"],
 )
@@ -115,7 +139,14 @@ def health():
             "sparse_index": len(STATE["retriever"].uids),
             "xg_models": STATE["xg"] is not None,
             "planner": "rules",
-            "teams_known": len(STATE["vocab"].teams)}
+            "teams_known": len(STATE["vocab"].teams),
+            # Say which rankers are actually live rather than implying fusion.
+            "rankers": "sparse+dense (fused)" if _dense_on() else "sparse only",
+            "dense": _dense_on()}
+
+
+def _dense_on() -> bool:
+    return DENSE_ENABLED and STATE["retriever"].dense_available
 
 
 def _build_plan(text: str) -> PlanResponse:
@@ -192,7 +223,11 @@ def search(
                     ended_in_goal=ended_in_goal)
     t0 = time.perf_counter()
     out = STATE["retriever"].search(STATE["conn"], sequence_hint=sequence_hint,
-                                    filters=f, limit=limit, use_dense=use_dense)
+                                    filters=f, limit=limit,
+                                    # The deployment flag is authoritative: with
+                                    # PITCHQUERY_DENSE=0 a caller cannot force a
+                                    # MiniLM load onto a box that can't afford it.
+                                    use_dense=use_dense and _dense_on())
     rows = hydrate(STATE["conn"], out["results"])
     return SearchResponse(
         results=[summary(r) for r in rows],
@@ -250,7 +285,7 @@ def similar(uid: str, limit: int = Query(20, ge=1, le=100), use_dense: bool = Tr
     t0 = time.perf_counter()
     try:
         out = STATE["retriever"].similar(STATE["conn"], uid, limit=limit,
-                                         use_dense=use_dense)
+                                         use_dense=use_dense and _dense_on())
     except KeyError:
         raise HTTPException(404, f"{uid} is not in the index")
     rows = hydrate(STATE["conn"], out["results"])
@@ -273,10 +308,12 @@ def possession(uid: str):
 
     with STATE["conn"].cursor() as cur:
         cur.execute(
-            "SELECT idx, period, minute, second, type, player, team, x, y, end_x, end_y, "
-            "       duration, under_pressure, possession_team, raw "
-            "FROM events WHERE match_id = %s AND possession = %s "
-            "ORDER BY idx",          # index, never timestamp — it resets each period
+            "SELECT e.idx, e.period, e.minute, e.second, e.type, e.player, e.team, "
+            "       e.x, e.y, e.end_x, e.end_y, e.duration, e.under_pressure, "
+            "       e.possession_team, e.token, s.freeze_frame "
+            "FROM events e LEFT JOIN shots s ON s.event_id = e.event_id "
+            "WHERE e.match_id = %s AND e.possession = %s "
+            "ORDER BY e.idx",        # index, never timestamp — it resets each period
             (row["match_id"], int(uid.split(":")[1])))
         cols = [d.name for d in cur.description]
         evs = [dict(zip(cols, r)) for r in cur.fetchall()]
@@ -301,11 +338,9 @@ def possession(uid: str):
             second=e["second"] or 0, type=e["type"], player=e["player"], team=e["team"],
             is_attacking=attacking, x=x, y=y, end_x=ex, end_y=ey,
             duration=e["duration"], under_pressure=bool(e["under_pressure"]),
-            token=token(e["raw"]) if attacking else None))
-        if e["type"] == "Shot":
-            ff = (e["raw"].get("shot") or {}).get("freeze_frame")
-            if ff:
-                freeze = parse_freeze_frame(ff)
+            token=e["token"] if attacking else None))
+        if e["type"] == "Shot" and e["freeze_frame"]:
+            freeze = parse_freeze_frame(e["freeze_frame"])
 
     return PossessionDetail(summary=summary(row), events=points, freeze_frame=freeze)
 
@@ -328,6 +363,8 @@ def shot(event_id: str):
 
     my_xg = None
     if STATE["xg"] is not None and s["shot_type"] != "Penalty":
+        import pandas as pd
+
         from models.train_xg import BOOLEAN, CATEGORICAL, CONTEXT_NUMERIC, NUMERIC
 
         blob = STATE["xg"]

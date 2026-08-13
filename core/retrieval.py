@@ -11,6 +11,7 @@ the plan scores both separately so that claim is evidence rather than assertion.
 """
 import pickle
 from collections import defaultdict
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
@@ -93,17 +94,89 @@ def rrf(*rankings: Iterable[str], k: int = 60) -> list:
     return sorted(scores, key=lambda p: (-scores[p], p))
 
 
+def make_vectorizer():
+    """The TF-IDF configuration, defined once.
+
+    Both `ingest/05_embed.py` and the runtime fallback below build the index
+    from this, because a vectorizer fitted with different settings produces a
+    different vocabulary — and a query vectorised one way against a matrix
+    built the other way silently returns nonsense.
+
+    tokenizer=str.split is not optional: the default token_pattern is
+    r"(?u)\\b\\w\\w+\\b", which would shred 'CROSS@F-R>' into 'cross' and 'f'
+    and discard every modifier — the exact signal the grammar encodes.
+    """
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    return TfidfVectorizer(
+        analyzer="word",
+        tokenizer=str.split,
+        token_pattern=None,
+        preprocessor=None,
+        lowercase=False,
+        ngram_range=(1, 3),
+        min_df=2,
+        sublinear_tf=True,
+        norm="l2",
+    )
+
+
 class Retriever:
     """Holds the sparse index in RAM. Build once, reuse for every query."""
 
-    def __init__(self, path=SPARSE_PATH):
-        with open(path, "rb") as f:
-            blob = pickle.load(f)
-        self.vectorizer = blob["vectorizer"]
-        self.matrix = blob["matrix"]              # l2-normalised rows
-        self.uids = blob["uids"]
+    def __init__(self, path=SPARSE_PATH, *, conn=None):
+        if Path(path).exists():
+            with open(path, "rb") as f:
+                blob = pickle.load(f)
+            self.vectorizer = blob["vectorizer"]
+            self.matrix = blob["matrix"]          # l2-normalised rows
+            self.uids = blob["uids"]
+        elif conn is not None:
+            # No prebuilt artefact — fit from the database instead. This is what
+            # makes a deployment self-contained: the host does not need a 39 MB
+            # pickle shipped alongside it, and the index can never drift from
+            # the data it was built out of. Fitting 67k short documents costs a
+            # couple of seconds at boot.
+            self.vectorizer, self.matrix, self.uids = self._fit_from_db(conn)
+        else:
+            raise FileNotFoundError(
+                f"no sparse index at {path}. Either run `python ingest/05_embed.py "
+                f"--sparse-only`, or construct with Retriever(conn=...) to build "
+                f"it from the database at startup.")
         self.row_of = {uid: i for i, uid in enumerate(self.uids)}
         self._model = None
+        self._dense_ok = None
+        self._shapes = None
+
+    @staticmethod
+    def _fit_from_db(conn):
+        with conn.cursor() as cur:
+            cur.execute("SELECT possession_uid, token_string FROM possessions "
+                        "ORDER BY possession_uid")
+            rows = cur.fetchall()
+        if not rows:
+            raise RuntimeError("the possessions table is empty — run the ingest first")
+        uids = [r[0] for r in rows]
+        vec = make_vectorizer()
+        return vec, vec.fit_transform([r[1] for r in rows]), uids
+
+    @property
+    def dense_available(self) -> bool:
+        """Whether the MiniLM ranker can run here.
+
+        Deployments on small free tiers skip torch entirely (it is ~2.5 GB
+        installed and needs more RAM than the box has), so the dense half of
+        the fusion is absent there. Everything else — sparse, shape search, the
+        planner — works unchanged, and the API reports which mode it is in
+        rather than pretending.
+        """
+        if self._dense_ok is None:
+            try:
+                import sentence_transformers  # noqa: F401
+                self._dense_ok = True
+            except Exception:
+                self._dense_ok = False
+        return self._dense_ok
 
     # -- dense model is lazy: sparse-only work never pays the torch import ----
     @property
@@ -228,6 +301,8 @@ class Retriever:
         """`sequence_hint` is a token string — either written by hand or, in
         Phase 6, invented by the planner as an 'ideal possession'."""
         filters = filters or Filters()
+        # Fall back to sparse-only rather than raising where torch is absent.
+        use_dense = use_dense and self.dense_available
         allowed = self.candidates(conn, filters)
         if allowed is not None and not allowed:
             return {"results": [], "sparse": [], "dense": [], "n_candidates": 0}
@@ -250,6 +325,7 @@ class Retriever:
         row = self.row_of.get(uid)
         if row is None:
             raise KeyError(f"{uid} is not in the sparse index")
+        use_dense = use_dense and self.dense_available
         filters = filters or Filters()
         allowed = self.candidates(conn, filters)
 

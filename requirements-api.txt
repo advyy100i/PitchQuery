@@ -1,0 +1,21 @@
+# Serving dependencies only — what a hosted API needs and nothing more.
+#
+# Deliberately absent: torch and sentence-transformers (~2.5 GB installed, and
+# more resident memory than a free tier has). The API detects their absence and
+# runs sparse + shape + planner, reporting `"rankers": "sparse only"` on /health
+# rather than pretending it is still fusing two rankers.
+#
+# Also absent: pandas and lightgbm. They are needed only to score a single shot
+# with the trained xG model, which is imported inside that one endpoint. Without
+# them /shot still returns StatsBomb's xG and the geometry, with my_xg null.
+#
+# Local development uses requirements.txt + requirements-ml.txt instead.
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+psycopg[binary]>=3.2
+python-dotenv>=1.0
+
+# Retrieval: the TF-IDF index is fitted from the database at startup.
+numpy>=1.26
+scikit-learn>=1.4

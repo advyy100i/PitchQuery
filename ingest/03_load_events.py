@@ -22,6 +22,7 @@ from psycopg.types.json import Jsonb  # noqa: E402
 from core import db  # noqa: E402
 from core.config import RAW_DIR, REPO_ROOT  # noqa: E402
 from core.features import shot_row  # noqa: E402
+from core.zones import token as grammar_token  # noqa: E402
 
 BATCH = 5000
 
@@ -41,8 +42,8 @@ ON CONFLICT (match_id) DO UPDATE SET
 EVENT_SQL = """
 INSERT INTO events (event_id, match_id, idx, period, minute, second, type,
                     play_pattern, possession, possession_team, team, player,
-                    position, x, y, end_x, end_y, under_pressure, duration, raw)
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    position, x, y, end_x, end_y, under_pressure, duration, token, raw)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (event_id) DO UPDATE SET
   idx = EXCLUDED.idx, period = EXCLUDED.period, minute = EXCLUDED.minute,
   second = EXCLUDED.second, type = EXCLUDED.type, play_pattern = EXCLUDED.play_pattern,
@@ -50,7 +51,7 @@ ON CONFLICT (event_id) DO UPDATE SET
   team = EXCLUDED.team, player = EXCLUDED.player, position = EXCLUDED.position,
   x = EXCLUDED.x, y = EXCLUDED.y, end_x = EXCLUDED.end_x, end_y = EXCLUDED.end_y,
   under_pressure = EXCLUDED.under_pressure, duration = EXCLUDED.duration,
-  raw = EXCLUDED.raw
+  token = EXCLUDED.token, raw = EXCLUDED.raw
 """
 
 SHOT_SQL = """
@@ -125,6 +126,7 @@ def event_tuple(ev: dict, match_id: int) -> tuple:
         x, y, end_x, end_y,
         bool(ev.get("under_pressure", False)),
         ev.get("duration"),
+        grammar_token(ev),
         Jsonb(ev),
     )
 

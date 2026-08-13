@@ -22,6 +22,7 @@ import numpy as np  # noqa: E402
 
 from core import db  # noqa: E402
 from core.config import EMBED_DIM, EMBED_MODEL, INDEX_DIR  # noqa: E402
+from core.retrieval import make_vectorizer  # noqa: E402
 
 SPARSE_PATH = INDEX_DIR / "tfidf.pkl"
 
@@ -36,22 +37,9 @@ def load_corpus(conn):
 
 
 def build_sparse(uids, docs):
-    from sklearn.feature_extraction.text import TfidfVectorizer
-
-    # tokenizer=str.split is not optional. The default token_pattern is
-    # r"(?u)\b\w\w+\b", which would shred 'CROSS@F-R>' into 'cross' and 'f'
-    # and throw away every modifier — the exact signal the grammar encodes.
-    vec = TfidfVectorizer(
-        analyzer="word",
-        tokenizer=str.split,
-        token_pattern=None,   # explicit: silences sklearn's "unused parameter" warning
-        preprocessor=None,
-        lowercase=False,
-        ngram_range=(1, 3),
-        min_df=2,             # an n-gram seen once cannot help retrieval
-        sublinear_tf=True,    # a 60-token possession should not dominate on length
-        norm="l2",
-    )
+    # The vectorizer settings live in core/retrieval.py so that the index built
+    # here and the one a deployment builds at startup are provably identical.
+    vec = make_vectorizer()
     t0 = time.time()
     matrix = vec.fit_transform(docs)
     print(f"  tfidf: {matrix.shape[0]:,} x {matrix.shape[1]:,} "

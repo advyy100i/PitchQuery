@@ -98,6 +98,81 @@ one means left. Sparse never makes that mistake. Dense earns its keep on queries
 where the exact token sequence differs but the shape is right (`q10` dribble into
 the box: sparse 0.0, dense 1.0).
 
+## Deploying
+
+**Vercel** for the frontend, **Render** for the API, **Neon** for Postgres —
+all three free, no card required for any of them.
+
+Everything about this split follows from one measurement. The local database is
+3.7 GB, of which 1.35 GB is raw StatsBomb JSONB and 98 MB is MiniLM vectors.
+Neither is needed to serve a query: the grammar token each event was parsed for
+is stored on the row, and the dense ranker cannot run on a free tier anyway. Drop
+those columns and the **entire 431-match corpus ships in 424 MB** — no demo
+subset, no cutting the data down to a hundred matches.
+
+| | local | hosted |
+|---|--:|--:|
+| database | 3.7 GB | **424 MB** |
+| API resident memory | 570 MB | **252 MB** |
+| rankers | sparse + dense (fused) | sparse only |
+| P@5 (25 discriminating queries) | 0.608 | 0.544 |
+
+The API reports which mode it is in on `/health` (`"rankers": "sparse only"`)
+rather than implying it is still fusing two rankers. Dense retrieval is off
+because torch is ~2.5 GB installed and takes resident memory to 570 MB, past
+Render's 512 MB. Everything else — sparse retrieval, shape search, the rule
+planner, scouting notes, clip playback with freeze frames — is unchanged.
+
+### 1. Database
+
+Create a free Neon project, then push the serving subset straight into it. The
+script streams table to table with `COPY`; nothing is buffered or written to
+disk.
+
+```powershell
+python deploy/export_to_neon.py --target "postgresql://...neon.tech/db?sslmode=require"
+python deploy/export_to_neon.py --target "..." --dry-run      # size it first
+python deploy/export_to_neon.py --target "..." --matches 250  # ~265 MB instead
+```
+
+424 MB is 85% of Neon's 500 MB free tier, which works but leaves little room for
+WAL and vacuum churn. `--matches 250` ships the most recent 250 matches at
+roughly 265 MB if you would rather have the headroom; search still covers every
+possession in whatever you ship. `events` is 368 MB of the total and exists only
+so clips can be played back.
+
+### 2. API
+
+Render picks up `render.yaml` from the repo root ("New > Blueprint"). Two
+variables are marked `sync: false` and must be set in the dashboard:
+
+- `DATABASE_URL` — the Neon string, including `?sslmode=require`
+- `PITCHQUERY_CORS_ORIGINS` — the Vercel URL, once step 3 gives you one
+
+No build artefact is uploaded. The TF-IDF index is fitted from the database at
+startup in about two seconds, which also means it can never drift from the data
+it was built out of.
+
+### 3. Frontend
+
+Import the repo on Vercel, set **Root Directory** to `web`, and add one
+environment variable:
+
+```
+NEXT_PUBLIC_API_URL = https://your-api.onrender.com
+```
+
+Then go back and set `PITCHQUERY_CORS_ORIGINS` on Render to the Vercel URL.
+Until you do, the API answers `curl` but a browser blocks every request from
+the site.
+
+### Free-tier behaviour worth knowing
+
+Render free web services sleep after 15 minutes idle and take **~50 seconds** to
+wake. That is fine for a link someone opens once, and bad in a live interview —
+open the API's `/health` a minute before you demo. Neon suspends compute too but
+resumes in well under a second.
+
 ## Data source
 
 Event data from **StatsBomb Open Data**

@@ -4,6 +4,19 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# Load .env HERE, before any os.getenv below runs. core/db.py also calls
+# load_dotenv, but it imports this module first — so anything set in .env and
+# read at import time in this file was previously ignored, and PITCHQUERY_DATA
+# silently fell back to its default. Real environment variables still win:
+# load_dotenv does not override what the process was started with, which is
+# what a hosted deployment relies on.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(REPO_ROOT / ".env")
+except ImportError:      # dotenv is optional at runtime
+    pass
+
 # Raw JSON lives OUTSIDE OneDrive on purpose: a few hundred matches is several GB
 # and OneDrive's free tier is 5 GB. Override with the PITCHQUERY_DATA env var.
 DATA_DIR = Path(os.getenv("PITCHQUERY_DATA", Path.home() / "pitchquery-data"))
