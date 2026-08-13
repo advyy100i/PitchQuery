@@ -1,0 +1,5 @@
+# Phase 3-4 only. Install when you get there — sentence-transformers pulls
+# torch (~2.5 GB on disk). Still free, still CPU-only, no GPU needed.
+scikit-learn>=1.4
+lightgbm>=4.3
+sentence-transformers>=2.7

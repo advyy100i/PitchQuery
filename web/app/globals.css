@@ -1,0 +1,693 @@
+/* ==========================================================================
+   PitchQuery — visual system
+
+   Restraint is the brief. One accent colour, a warm paper ground, hairline
+   rules, and typography doing the work that colour usually does. The pitch is
+   the only place with real chroma, because it is the thing worth looking at.
+   ========================================================================== */
+
+:root {
+  /* Ground and surfaces. Warm greys, never pure white — pure white next to a
+     pale pitch reads as unfinished rather than clean. */
+  --paper: #faf9f6;
+  --panel: #ffffff;
+  --sunken: #f4f2ee;
+
+  /* Ink. A near-black with a little warmth in it, and two steps down. */
+  --ink: #14171a;
+  --ink-soft: #40464d;
+  --muted: #757b83;
+  --faint: #a6abb2;
+
+  /* Hairlines. Two weights: one you notice, one you don't. */
+  --line: #e5e1da;
+  --line-soft: #efece6;
+
+  /* One accent, deep enough to sit under text without shouting. */
+  --accent: #1d5b56;
+  --accent-ink: #123f3b;
+  --accent-wash: #eef4f3;
+
+  /* Semantics, desaturated on purpose. */
+  --goal: #1c6343;
+  --goal-wash: #e9f2ed;
+  --warn: #9c4a2f;
+
+  /* Pitch. */
+  --turf: #f2f4ef;
+  --turf-alt: #eef1ea;
+  --turf-line: #c8cfc6;
+
+  /* Elevation: shadows so soft they read as paper lifting, not as chrome. */
+  --shadow-sm: 0 1px 2px rgba(20, 23, 26, 0.04);
+  --shadow-md: 0 1px 2px rgba(20, 23, 26, 0.04), 0 6px 16px -8px rgba(20, 23, 26, 0.12);
+  --shadow-lg: 0 1px 3px rgba(20, 23, 26, 0.05), 0 16px 40px -16px rgba(20, 23, 26, 0.18);
+
+  --radius-lg: 14px;
+  --radius-md: 9px;
+  --radius-sm: 6px;
+  --radius-pill: 999px;
+
+  --font-ui: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-serif), Georgia, "Times New Roman", serif;
+  --font-code: var(--font-mono), ui-monospace, SFMono-Regular, Consolas, monospace;
+
+  --ease: cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #0f1113;
+    --panel: #161a1d;
+    --sunken: #121518;
+
+    --ink: #e8e9e6;
+    --ink-soft: #b9bdc1;
+    --muted: #8a9097;
+    --faint: #666c73;
+
+    --line: #262b30;
+    --line-soft: #1e2226;
+
+    --accent: #63b0a7;
+    --accent-ink: #8ecec5;
+    --accent-wash: #16211f;
+
+    --goal: #5fb488;
+    --goal-wash: #142019;
+    --warn: #cf8163;
+
+    --turf: #171b19;
+    --turf-alt: #141816;
+    --turf-line: #333b36;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.4), 0 6px 16px -8px rgba(0, 0, 0, 0.6);
+    --shadow-lg: 0 1px 3px rgba(0, 0, 0, 0.5), 0 16px 40px -16px rgba(0, 0, 0, 0.7);
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.55;
+  font-feature-settings: "kern" 1, "liga" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection { background: var(--accent); color: #fff; }
+
+main {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 40px 32px 72px;
+}
+
+@media (max-width: 720px) { main { padding: 24px 18px 48px; } }
+
+/* ---------- typography ---------------------------------------------------- */
+
+h1 {
+  font-family: var(--font-display);
+  font-size: 34px;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  line-height: 1.1;
+  margin: 0;
+}
+
+h2 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+  margin: 0 0 12px;
+}
+
+.lede {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-style: italic;
+  color: var(--muted);
+  margin: 6px 0 0;
+  max-width: 46ch;
+}
+
+.muted { color: var(--muted); }
+.small { font-size: 12.5px; }
+
+code, .mono {
+  font-family: var(--font-code);
+  font-size: 12px;
+  font-variant-ligatures: none;
+}
+
+/* Figures should line up in columns wherever they're compared. */
+.tnum, .stats dd, .badge { font-variant-numeric: tabular-nums; }
+
+.error {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 22%, transparent);
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  margin: 16px 0;
+}
+
+/* ---------- masthead ------------------------------------------------------ */
+
+header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 32px;
+  flex-wrap: wrap;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.stats {
+  display: flex;
+  gap: 30px;
+  margin: 0;
+}
+
+.stats div { display: flex; flex-direction: column; gap: 1px; }
+
+.stats dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+  font-weight: 600;
+}
+
+.stats dd {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+/* ---------- controls ------------------------------------------------------ */
+
+button {
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink-soft);
+  padding: 7px 13px;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease),
+              background 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--ink);
+}
+
+button:disabled { opacity: 0.45; cursor: default; }
+
+:where(button, input, select, [tabindex]):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: 2px;
+}
+
+.go {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
+}
+
+.go:hover:not(:disabled) {
+  background: var(--accent-ink);
+  border-color: var(--accent-ink);
+  color: #fff;
+}
+
+input, select {
+  font: inherit;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--ink);
+  padding: 9px 12px;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+
+input:hover, select:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+
+input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+  outline: none;
+}
+
+/* ---------- mode switch --------------------------------------------------- */
+
+.modes {
+  display: flex;
+  gap: 4px;
+  margin: 28px 0 0;
+  padding: 3px;
+  background: var(--sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-pill);
+  width: fit-content;
+}
+
+.modes button {
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-pill);
+  padding: 6px 16px;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.modes button.on {
+  background: var(--panel);
+  color: var(--ink);
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- query panel --------------------------------------------------- */
+
+.querybar {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  margin: 14px 0 26px;
+  box-shadow: var(--shadow-md);
+}
+
+.field > span {
+  display: block;
+  font-size: 10px;
+  color: var(--faint);
+  margin-bottom: 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-weight: 600;
+}
+
+.querybar input { width: 100%; }
+.querybar input.ask { font-size: 16px; padding: 12px 14px; }
+.querybar input:not(.ask) { font-family: var(--font-code); font-size: 12.5px; }
+
+.examples { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 14px; }
+
+.chip {
+  border-radius: var(--radius-pill);
+  padding: 5px 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.chip:hover { background: var(--accent-wash); border-color: transparent; color: var(--accent); }
+
+.filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+
+.filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  color: var(--faint);
+}
+
+.filters select { min-width: 150px; font-size: 13px; text-transform: none;
+                  letter-spacing: 0; font-weight: 400; color: var(--ink); }
+
+.filters .check {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--ink-soft);
+}
+
+.advanced { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line-soft); }
+
+/* ---------- translation readout ------------------------------------------- */
+
+.readout {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.plan-terms {
+  list-style: none;
+  margin: 10px 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 12.5px;
+}
+
+.plan-terms li { white-space: nowrap; color: var(--muted); }
+
+.plan-terms code {
+  background: var(--accent-wash);
+  color: var(--accent-ink);
+  border-radius: var(--radius-sm);
+  padding: 2px 7px;
+  margin-right: 3px;
+}
+
+/* ---------- layout -------------------------------------------------------- */
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(360px, 30%) 1fr;
+  gap: 26px;
+  align-items: start;
+}
+
+@media (max-width: 1040px) { .layout { grid-template-columns: 1fr; } }
+
+/* The note and the heading stay put; only the card list scrolls. Putting the
+   note inside the scroller made it eat the column and pushed every result out
+   of view. */
+.results {
+  display: flex;
+  flex-direction: column;
+  max-height: 84vh;
+  position: sticky;
+  top: 24px;
+}
+
+.result-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+  /* Fade the last card so it reads as scrollable rather than cut off. */
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+
+.result-list::-webkit-scrollbar { width: 8px; }
+.result-list::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--paper);
+}
+.result-list::-webkit-scrollbar-track { background: transparent; }
+
+/* The note can get tall on a rich result set; give it its own ceiling. */
+/* Everything above the card list keeps its natural height — without this the
+   flex column shrinks the note and clips it mid-sentence. */
+.results > *:not(.result-list) { flex: none; }
+
+/* The note can still run long on a rich result set, so give it its own ceiling
+   rather than letting it push every result off the screen. The fade makes a
+   truncated note read as scrollable instead of as a sentence that got cut. */
+.note {
+  max-height: 34vh;
+  overflow-y: auto;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+}
+
+/* Colour keys inside the freeze-frame caption, so the legend and the dots
+   can never drift apart the way a hardcoded "blue = attacking" did. */
+.key { font-weight: 600; }
+.key-mate { color: var(--accent); }
+.key-opp { color: var(--warn); }
+.key-gk { color: #b8871f; }
+
+/* ---------- result cards -------------------------------------------------- */
+
+.card {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: 13px 15px;
+  margin-bottom: 9px;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease),
+              transform 0.15s var(--ease);
+}
+
+.card:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+              box-shadow: var(--shadow-md); }
+
+/* Selection reads as an accent edge rather than a heavy ring — quieter, and it
+   doesn't shift the card's geometry. */
+.card.selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  box-shadow: var(--shadow-md), inset 3px 0 0 var(--accent);
+}
+
+.card-head { display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+             font-size: 14.5px; }
+.card-head strong { font-weight: 600; letter-spacing: -0.005em; }
+
+.card-meta { margin: 3px 0 8px; font-size: 12px; color: var(--muted); }
+
+.badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.badge.goal { background: var(--goal-wash); color: var(--goal);
+              box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--goal) 25%, transparent); }
+.badge.shot { background: var(--sunken); color: var(--muted); }
+.badge.xg { border: 1px solid var(--line); color: var(--muted); text-transform: none;
+            letter-spacing: 0; font-weight: 500; }
+
+.tokens {
+  display: block;
+  color: var(--muted);
+  word-break: break-word;
+  line-height: 1.75;
+  margin: 7px 0;
+  font-size: 11.5px;
+}
+
+.tokens.block {
+  background: var(--sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-top: 14px;
+  color: var(--ink-soft);
+}
+
+.card-actions { display: flex; justify-content: space-between; align-items: center;
+                margin-top: 10px; }
+.card-actions button { font-size: 12px; padding: 5px 11px; }
+.uid { font-family: var(--font-code); font-size: 11px; color: var(--faint); }
+
+/* ---------- sparkline ----------------------------------------------------- */
+
+.spark { display: block; margin: 6px 0 2px; overflow: visible; }
+.spark-line { fill: none; stroke: var(--faint); stroke-width: 1.1;
+              stroke-linejoin: round; stroke-linecap: round; opacity: 0.75; }
+.spark-dot.band-0 { fill: var(--line); }
+.spark-dot.band-1 { fill: var(--faint); }
+.spark-dot.band-2 { fill: var(--accent); }
+
+/* ---------- pitch --------------------------------------------------------- */
+
+.viewer {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-md);
+  position: sticky;
+  top: 24px;
+}
+
+.clip-head { margin-bottom: 14px; }
+.clip-head strong { font-size: 16px; font-weight: 600; }
+
+.pitch {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.turf { fill: var(--turf); }
+.mow { fill: var(--turf-alt); }
+
+.lines rect, .lines line, .lines circle {
+  fill: none;
+  stroke: var(--turf-line);
+  stroke-width: 0.4;
+}
+
+.lines .dot { fill: var(--turf-line); stroke: none; }
+.lines .goal { fill: var(--turf-line); stroke: none; }
+.arrow line { stroke: var(--faint); stroke-width: 0.3; }
+.arrow polygon { fill: var(--faint); }
+
+.trail {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 0.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.5;
+  stroke-dasharray: 1.6 1.2;
+}
+
+.ball { fill: var(--ink); stroke: var(--panel); stroke-width: 0.5; }
+.ball.shot { fill: var(--goal); }
+.pressure { fill: none; stroke: var(--warn); stroke-width: 0.35; opacity: 0.7; }
+
+.mate { fill: var(--accent); opacity: 0.9; }
+.opp { fill: var(--warn); opacity: 0.75; }
+.gk { fill: #d3a13c; }
+
+.controls { display: flex; align-items: center; gap: 14px; margin-top: 14px;
+            flex-wrap: wrap; }
+
+.controls input[type="range"] {
+  flex: 1;
+  min-width: 140px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  accent-color: var(--accent);
+}
+
+.step-label { font-size: 12px; color: var(--muted); min-width: 180px;
+              font-family: var(--font-code); }
+
+/* ---------- shape picker -------------------------------------------------- */
+
+.shape-pitch { cursor: crosshair; }
+
+.zone-cell {
+  fill: transparent;
+  stroke: var(--turf-line);
+  stroke-width: 0.2;
+  stroke-dasharray: 0.8 1.2;
+  transition: fill 0.12s var(--ease);
+}
+
+.zone-cell:hover { fill: color-mix(in srgb, var(--accent) 12%, transparent); }
+.zone-cell.picked { fill: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+/* The viewBox is 120 units wide and renders ~1000px, so 1 unit ≈ 8px —
+   label sizes are in those units, not screen pixels. */
+.zone-label {
+  font-size: 2.4px;
+  fill: var(--faint);
+  text-anchor: middle;
+  opacity: 0.5;
+  font-family: var(--font-code);
+  letter-spacing: 0.08px;
+}
+
+.shape-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 0.8;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+.shape-dot { fill: var(--accent); stroke: var(--panel); stroke-width: 0.5; }
+.shape-dot-label { font-size: 3px; fill: #fff; text-anchor: middle; font-weight: 600;
+                   font-family: var(--font-ui); }
+
+.shape .controls code { color: var(--muted); }
+
+/* ---------- scouting note ------------------------------------------------- */
+
+.note {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.note ul { list-style: none; margin: 0; padding: 0; }
+
+.note li {
+  margin-bottom: 11px;
+  line-height: 1.6;
+  font-size: 14px;
+  font-family: var(--font-display);
+  color: var(--ink-soft);
+}
+
+.note li:last-child { margin-bottom: 0; }
+
+.note .cites { display: inline-flex; flex-wrap: wrap; gap: 3px; vertical-align: middle; }
+
+.cite {
+  font-family: var(--font-code);
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-soft);
+  background: var(--sunken);
+  color: var(--faint);
+  transition: all 0.12s var(--ease);
+}
+
+.cite:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+.cite.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.note > p { margin: 12px 0 0; padding-top: 10px; border-top: 1px solid var(--line-soft); }
+
+/* ---------- footer -------------------------------------------------------- */
+
+footer {
+  margin-top: 44px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+
+footer a { color: var(--accent); text-decoration-thickness: 1px;
+           text-underline-offset: 2px; }
+
+/* ---------- motion -------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

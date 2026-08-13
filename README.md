@@ -1,0 +1,181 @@
+# PitchQuery — Tactical Possession Search over Open Football Data
+
+Type a description of a passage of play in English, get back ranked animated
+clips of possessions that match, plus a generated scouting note.
+
+## The three numbers (fill in at the end)
+
+1. Search over **66,817** possessions from **431** matches, precision@5 of
+   **0.608** on a 30-query evaluation set, p95 latency **58** ms.
+   Relevance comes from per-query programmatic rubrics written before any
+   results were seen, which agree with human judgement **87%** of the time on a
+   blind 71-item audit (`docs/retrieval_eval.md`).
+2. My context-aware xG closes **76%** of the log-loss gap between a
+   distance+angle baseline and StatsBomb's own production xG model, on the
+   held-out 2022 World Cup and 2023 Women's World Cup (`docs/benchmark.md`).
+3. Natural-language queries are translated to structured filters by a
+   **deterministic rule parser, not an LLM** — free, offline, 1 ms per parse,
+   and every filter traceable to the phrase that produced it. Measured against
+   the same 30 queries written by hand: **0.611 vs 0.632 P@5** on the subset
+   where both produce identical filters, and it holds up on held-out
+   paraphrases (`docs/planner_eval.md`). Every claim in a generated scouting
+   note links to the possessions it was computed from, and **cannot cite
+   anything else** — the sentence and its evidence come from one expression
+   (`core/notes.py`, enforced by `tests/test_notes.py`).
+
+## Known defect: short possessions are over-retrieved
+
+Across the top 5 results for all 30 parsed queries, the median possession is
+**6 tokens against a corpus median of 13**, and **35% have 4 tokens or fewer**.
+TF-IDF vectors are L2-normalised, so a 3-token possession whose every token
+matches the query scores near-perfectly, while a 20-token possession containing
+the same passage plus the build-up that led to it is diluted.
+
+This inflates the headline P@5: most rubrics test for the presence of tokens,
+not for the possession being a substantial passage of play, so a 1-second
+fragment can satisfy the letter of the rule. Fixing it means a length floor or
+a re-tuned normalisation, and re-running every eval — the numbers above should
+be read as an upper bound until then.
+
+## Two things the plan did not ask for
+
+**Draw a possession instead of describing one.** Click zones on the pitch and
+get back moves that took that journey — no text, no vectors, no model. The
+query is matched against the `zone_path` every possession already carries, in
+~30 ms over 66,817 of them.
+
+Ranking is by *coverage*: what fraction of a possession's whole journey the
+drawing accounts for, after collapsing consecutive repeats. Scoring by how
+tightly the drawn zones cluster instead was tried first and was wrong — it
+surfaced 100-touch possessions where the three drawn zones happened to line up
+somewhere in the middle, which is incidental rather than the shape of the move.
+Coverage also makes the interaction self-consistent: the number of zones you
+draw sets the length of move you get back.
+
+**Scouting notes whose citations cannot be wrong.** The plan specified an LLM
+that cites `possession_uid`s, plus a checker to drop sentences whose citations
+don't verify. Here each sentence is *computed from* the possessions it cites —
+claim and evidence are the same expression — so there is nothing to check:
+
+```python
+goals = [r for r in rows if r["ended_in_goal"]]
+Claim(f"{len(goals)} of the {n} are scored", uids=[r["possession_uid"] for r in goals])
+```
+
+That is a stronger guarantee than a generator plus a checker, since the checker
+exists to catch a generator that can lie. `tests/test_notes.py` enforces it, and
+caught a real violation while being written: a sentence counting goals was
+citing every shot. The note also skips whatever the query already fixed —
+filtering on corners and then being told "8 begin from a corner" is an echo, not
+an observation.
+
+The honest cost: it says only what those functions know how to say, and will
+never notice something surprising the way a model might.
+
+## A claim the plan made that the data did not support
+
+The build plan predicted that the sparse n-gram ranker would beat the dense one,
+because the tokens are a controlled vocabulary rather than natural language, and
+that dense retrieval would earn its place only in fusion. Measured over 25
+discriminating queries, that is only half right:
+
+| ranker | P@5 | P@10 | MRR |
+|---|--:|--:|--:|
+| sparse (TF-IDF n-grams) | 0.544 | **0.540** | **0.671** |
+| dense (MiniLM + pgvector) | **0.584** | 0.516 | 0.638 |
+| fused (RRF) | **0.608** | **0.600** | **0.751** |
+
+Sparse wins on P@10 and MRR — it ranks its best hit higher and holds precision
+deeper. Dense wins on P@5. They disagree far more than expected: **only 1 of the
+top 10 results overlaps** on a typical query. Fusion beats both on every metric,
+which is the real result, and it beats them *because* the two rankers fail
+differently rather than because either is strong alone.
+
+Where dense fails is specific and worth showing. Asked for a right-wing cross,
+its top hit was `CROSS@F-L>` — a left-wing cross. MiniLM sees `F-L` and `F-R` as
+nearly the same string, because they are one character apart, and it has no idea
+one means left. Sparse never makes that mistake. Dense earns its keep on queries
+where the exact token sequence differs but the shape is right (`q10` dribble into
+the box: sparse 0.0, dense 1.0).
+
+## Data source
+
+Event data from **StatsBomb Open Data**
+(<https://github.com/statsbomb/open-data>), used under their open-data licence.
+StatsBomb is credited here, in the web app footer, and on every exported chart.
+
+## Status
+
+- [x] Phase 0 — inventory + assumption probes (`docs/data_inventory.md`, `docs/probes.md`)
+- [x] Phase 1 — ingest to Postgres (`docs/ingest.md`) — 431 matches, 1.60M events, 11,185 shots
+- [x] Phase 2 — zone grid + token grammar — 66,817 possessions tokenised
+- [x] Phase 3 — hybrid retrieval + eval (`docs/retrieval_eval.md`) — fused P@5 0.608, p95 126 ms
+      *(pending: human audit of the programmatic rubrics, `python eval/audit.py`)*
+- [x] Phase 4 — xG benchmark (`docs/benchmark.md`) — 76% of the log-loss gap closed
+- [x] Phase 5 — FastAPI + Next.js pitch animator (no LLM involved)
+- [x] Phase 6 — query planner (`docs/planner_eval.md`) — **rule-based, no LLM**
+- [x] Draw-a-shape search (`GET /shape`) — retrieval with no text and no model
+- [x] Scouting notes with uncheatable citations (`core/notes.py`)
+- [ ] Phase 8 — ship
+
+## Setup
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt          # Phase 0-2
+copy .env.example .env
+
+python ingest/00_inventory.py            # -> docs/data_inventory.md
+python ingest/01_probe_assumptions.py    # -> docs/probes.md
+
+docker compose up -d db                  # postgres 16 + pgvector on :5433
+python ingest/02_fetch.py --comp 43:106 --comp 72:107   # ... see docs/ingest.md
+python ingest/03_load_events.py --init
+python ingest/04_build_possessions.py
+python ingest/05_embed.py                # TF-IDF + MiniLM -> pgvector
+
+pip install -r requirements-ml.txt       # Phase 3-4 (torch, CPU only)
+python eval/score_retrieval.py           # -> docs/retrieval_eval.md
+python models/train_xg.py
+python models/evaluate_xg.py             # -> docs/benchmark.md
+
+pip install pytest
+python -m pytest tests/ -q               # citation + shape-matching guarantees
+```
+
+### Running the app
+
+```powershell
+docker compose up -d db
+uvicorn api.main:app --port 8000         # http://localhost:8000/docs
+cd web; npm install; npm run dev         # http://localhost:3000
+```
+
+Endpoints: `GET /search` (takes either `q=` plain English or `sequence_hint=`
+tokens), `GET /shape?zones=D-C,M-C,F-C` (retrieve by a drawn path),
+`GET /plan?q=` (the English → structured-query translation on its own),
+`GET /similar/{uid}`, `GET /possession/{uid}`, `GET /shot/{event_id}` (my xG and
+StatsBomb's side by side), `GET /meta`.
+
+Raw JSON is cached under `PITCHQUERY_DATA` (default `~/pitchquery-data`), which is
+deliberately outside any cloud-synced folder.
+
+## Cost
+
+**Zero.** Everything runs locally: the data is a public static repo, and
+Postgres, pgvector, LightGBM, sentence-transformers and the rest are open source
+and CPU-only. There is no GPU anywhere and no API key of any kind.
+
+The plan called for an LLM query planner, which would have been the one paid
+dependency. It was replaced by the rule parser in `core/planner.py`, which is
+free, runs in ~1 ms with no network call, is deterministic (the same sentence
+always produces the same query, so a retrieval regression is never the
+planner's fault), and — unlike a model — can show the user exactly which phrase
+produced which filter, and which words it failed to understand.
+
+The trade is real and is measured rather than asserted: the parser only knows
+the vocabulary written into it. It has no alias table, so "PSG" is not a team;
+an LLM would resolve that. `docs/planner_eval.md` reports the cost of that trade
+alongside the benefit, including a held-out paraphrase set that tests whether
+the rules generalise beyond the sentences they were written against.

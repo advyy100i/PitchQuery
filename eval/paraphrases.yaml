@@ -1,0 +1,66 @@
+# Held-out paraphrases — the generalisation test for core/planner.py.
+#
+# The parser's rules were written while looking at failures on the `text`
+# fields in queries.yaml, which makes the headline number in
+# docs/planner_eval.md an IN-SAMPLE result. These paraphrases are the control:
+# same intent, deliberately different words, chosen to exercise synonym paths
+# the tuning never touched ("delivery" not "cross", "penalty area" not "the
+# box", "route one" not "long ball").
+#
+# Each is judged by the ORIGINAL query's rubric, so a paraphrase that retrieves
+# as well as the original means the vocabulary generalises rather than the
+# rules having been fitted to particular sentences.
+#
+# `expect_fail` marks a case included precisely because it is expected to fail —
+# an honest limit of a rule parser, not something to quietly leave out.
+
+paraphrases:
+  - id: q01
+    text: delivery from the right flank into the penalty area leading to an attempt
+  - id: q02
+    text: ball whipped in from the left touchline into the penalty box producing an effort
+  - id: q03
+    text: diagonal ball changed flanks to the other side
+  - id: q04
+    text: rapid transition finishing with an effort
+  - id: q05
+    text: corner kick met with a header
+  - id: q06
+    text: slipped in behind the defence
+  - id: q07
+    text: playing out from the back that reaches the attacking third
+  - id: q09
+    text: won the ball in the final third and struck immediately
+  - id: q10
+    text: took on his man and drove into the penalty area
+  - id: q11
+    text: Barcelona working the ball into the inside left channel
+  - id: q12
+    text: PSG on the break
+    expect_fail: true          # no alias table: 'PSG' is not the stored team name
+  - id: q13
+    text: Bayer Leverkusen counter-press that ends in a goal
+  - id: q14
+    text: effort from long range after a knock-down
+  - id: q16
+    text: throw in that produces an attempt
+  - id: q17
+    text: set-piece delivered into the penalty area
+  - id: q19
+    text: central combination played through midfield
+  - id: q20
+    text: goal finished off from inside the six yard box
+  - id: q21
+    text: playing out from the back under the press
+  - id: q22
+    text: route one pass from the back line into the attacking third
+  - id: q26
+    text: attack down the right wing finishing from the inside right
+  - id: q27
+    text: cut out in midfield and broke forward
+  - id: q28
+    text: pulled it back from the right byline
+  - id: q29
+    text: give-and-go through the inside-left channel
+  - id: q30
+    text: clear-cut chance created from open play

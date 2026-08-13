@@ -1,0 +1,282 @@
+# 30 hand-written evaluation queries (plan §10, Phase 3).
+#
+# Each query carries three things:
+#   filters        hard SQL constraints — applied before any ranking
+#   sequence_hint  a synthetic "ideal possession" in the token grammar; this is
+#                  the string both rankers actually match against. In Phase 6
+#                  the LLM planner writes this field itself from `text`.
+#   rubric         what a human should count as relevant when judging top-10.
+#
+# The rubric is the important part and it is written BEFORE any results are
+# seen. Judging against a rubric you wrote after looking at the output is how
+# you talk yourself into a good P@5.
+#
+# Token grammar: ACTION@ZONE with optional modifiers.
+#   ACTION  PASS CROSS THROUGH SWITCH CARRY DRIB SHOT RECV RECOV DUEL CLR INT LOSS SETP
+#   ZONE    {D,M,F}-{L,LI,C,RI,R}   band x channel
+#   +       progressive     >  ends in the box     ^  under pressure
+
+queries:
+  - id: q01
+    text: right-wing cross into the box that ends in a shot
+    filters: {ended_in_shot: true}
+    sequence_hint: PASS@M-R+ RECV@F-R CARRY@F-R CROSS@F-R> RECV@F-C SHOT@F-C
+    rubric: >
+      Relevant if a cross is delivered from the right wing (F-R or F-RI) into
+      the box and the possession ends in a shot. A cross from the right that is
+      cleared and recycled into a shot still counts. A left-sided cross does not.
+
+  - id: q02
+    text: left-wing cross into the box that ends in a shot
+    filters: {ended_in_shot: true}
+    sequence_hint: PASS@M-L+ RECV@F-L CARRY@F-L CROSS@F-L> RECV@F-C SHOT@F-C
+    rubric: >
+      Mirror of q01 on the left (F-L or F-LI). Must contain a CROSS token in a
+      left-side final-third zone and end in a shot.
+
+  - id: q03
+    text: switch of play from one flank to the other
+    filters: {}
+    sequence_hint: CARRY@M-L PASS@M-L RECV@M-L SWITCH@M-L+ RECV@M-R CARRY@M-R+
+    rubric: >
+      Relevant if the possession contains a SWITCH token, i.e. a pass travelling
+      at least 30m laterally with under 20m of forward progress. Possessions
+      that merely drift across the pitch over several short passes are not
+      relevant — the switch must be one pass.
+
+  - id: q04
+    text: fast counter-attack ending in a shot
+    filters: {play_pattern: From Counter, ended_in_shot: true}
+    sequence_hint: RECOV@M-C CARRY@M-C+ PASS@M-C+ RECV@F-C CARRY@F-C SHOT@F-C
+    rubric: >
+      Relevant if play_pattern is From Counter and the possession ends in a
+      shot. Prefer short, direct sequences; a counter that stalls into a 40-pass
+      possession before the shot is weakly relevant at best.
+
+  - id: q05
+    text: corner headed goalward
+    filters: {play_pattern: From Corner, ended_in_shot: true}
+    sequence_hint: SETP@F-R> RECV@F-C SHOT@F-C
+    rubric: >
+      Relevant if the possession starts from a corner (SETP in a final-third
+      wide zone) and produces a shot from inside the box. Second-phase shots
+      after the corner is cleared and returned still count.
+
+  - id: q06
+    text: through ball played in behind the defence
+    filters: {}
+    sequence_hint: CARRY@M-C PASS@M-C+ THROUGH@M-C+ RECV@F-C CARRY@F-C SHOT@F-C
+    rubric: >
+      Relevant if the possession contains a THROUGH token. The through ball
+      should be into the final third or the box; a through ball played inside
+      the defensive third is not what the query means.
+
+  - id: q07
+    text: build-up from the goalkeeper that reaches the final third
+    filters: {play_pattern: From Goal Kick}
+    sequence_hint: SETP@D-C PASS@D-C RECV@D-L CARRY@D-L PASS@M-L+ RECV@M-C CARRY@M-C+ PASS@F-C+
+    rubric: >
+      Relevant if the possession starts from a goal kick and at least one token
+      lands in an F- zone. Goal kicks that are lost in midfield are not
+      relevant.
+
+  - id: q08
+    text: long possession that ends in a shot
+    filters: {ended_in_shot: true, min_events: 25}
+    sequence_hint: PASS@M-C RECV@M-C CARRY@M-C PASS@M-LI RECV@M-LI CARRY@M-LI PASS@M-RI RECV@M-RI PASS@F-RI+ RECV@F-C SHOT@F-C
+    rubric: >
+      Relevant if the possession has 25 or more tokens and ends in a shot —
+      sustained control, then a chance. Sequences padded out by repeated
+      defensive-third recycling with a single hopeful shot are weakly relevant.
+
+  - id: q09
+    text: high turnover in the final third leading immediately to a shot
+    filters: {ended_in_shot: true}
+    sequence_hint: RECOV@F-C CARRY@F-C SHOT@F-C
+    rubric: >
+      Relevant if the possession begins with a RECOV or INT token in an F- zone
+      and ends in a shot within a handful of tokens. A recovery in midfield is
+      not relevant.
+
+  - id: q10
+    text: dribble into the box
+    filters: {}
+    sequence_hint: RECV@F-RI CARRY@F-RI DRIB@F-RI CARRY@F-RI> SHOT@F-C
+    rubric: >
+      Relevant if a DRIB token occurs in a final-third zone and is followed by a
+      carry or shot inside the box. Dribbles in midfield do not count.
+
+  - id: q11
+    text: Barcelona working the ball into the left half-space
+    filters: {team: Barcelona, end_band: F}
+    sequence_hint: PASS@M-C RECV@M-LI CARRY@M-LI PASS@M-LI+ RECV@F-LI CARRY@F-LI
+    rubric: >
+      Relevant if the team is Barcelona and the possession reaches F-LI or F-L
+      through the inside-left channel. Barcelona possessions that arrive on the
+      right are not relevant.
+
+  - id: q12
+    text: Paris Saint-Germain counter-attack
+    filters: {team: Paris Saint-Germain, play_pattern: From Counter}
+    sequence_hint: RECOV@M-C CARRY@M-C+ PASS@F-LI+ RECV@F-L CARRY@F-L SHOT@F-C
+    rubric: >
+      Relevant if the team is PSG and play_pattern is From Counter. Rank by how
+      directly the sequence advances — long lateral counters are weaker.
+
+  - id: q13
+    text: Bayer Leverkusen pressing high and scoring
+    filters: {team: Bayer Leverkusen, ended_in_goal: true}
+    sequence_hint: RECOV@F-C CARRY@F-C PASS@F-C RECV@F-C SHOT@F-C
+    rubric: >
+      Relevant if Leverkusen score and the possession begins with a recovery or
+      interception in the attacking half. Goals from long build-ups starting in
+      their own third are not relevant.
+
+  - id: q14
+    text: shot from outside the box after a lay-off
+    filters: {ended_in_shot: true}
+    sequence_hint: PASS@F-C RECV@F-C PASS@F-C SHOT@M-C
+    rubric: >
+      Relevant if the final SHOT token sits in an M- zone or on the edge (the
+      possession ends in a shot taken outside the box). A shot inside the box is
+      not relevant regardless of the build-up.
+
+  - id: q15
+    text: overlapping run down the right ending in a cutback
+    filters: {}
+    sequence_hint: PASS@M-RI+ RECV@F-RI CARRY@F-RI PASS@F-R RECV@F-R CARRY@F-R PASS@F-R> RECV@F-C SHOT@F-C
+    rubric: >
+      Relevant if the ball goes wide right in the final third and is then
+      squared back into the box (a pass ending in the box that is not tagged
+      CROSS, or a CROSS from the byline zone). Must involve F-R.
+
+  - id: q16
+    text: throw-in routine that creates a shot
+    filters: {play_pattern: From Throw In, ended_in_shot: true}
+    sequence_hint: SETP@F-R RECV@F-RI CARRY@F-RI PASS@F-RI> RECV@F-C SHOT@F-C
+    rubric: >
+      Relevant if play_pattern is From Throw In and the possession ends in a
+      shot. Prefer throw-ins taken in the final third.
+
+  - id: q17
+    text: free kick played into the box
+    filters: {play_pattern: From Free Kick}
+    sequence_hint: SETP@F-LI> RECV@F-C SHOT@F-C
+    rubric: >
+      Relevant if the possession starts from a free kick and a token carries the
+      '>' box modifier. Short free kicks recycled into open play are not
+      relevant.
+
+  - id: q18
+    text: possession recycled backwards then switched and attacked again
+    filters: {}
+    sequence_hint: CARRY@F-L PASS@M-L RECV@D-LI PASS@D-LI SWITCH@D-C+ RECV@M-R CARRY@M-R+ PASS@F-R+
+    rubric: >
+      Relevant if the zone path retreats to a D- zone from an F- or M- zone and
+      subsequently returns to an F- zone on the opposite side. Both the retreat
+      and the return are required.
+
+  - id: q19
+    text: central combination play through the middle third
+    filters: {}
+    sequence_hint: RECV@M-C CARRY@M-C PASS@M-C RECV@M-C CARRY@M-C PASS@M-C+ RECV@F-C
+    rubric: >
+      Relevant if at least four consecutive tokens sit in M-C or F-C and the
+      possession progresses forward. Possessions that pass through the middle
+      once on the way elsewhere are not relevant.
+
+  - id: q20
+    text: goal scored from inside the six-yard box
+    filters: {ended_in_goal: true}
+    sequence_hint: CROSS@F-R> RECV@F-C SHOT@F-C
+    rubric: >
+      Relevant if the possession ends in a goal and the final shot is in F-C
+      close to goal, typically after a cross or cutback. Long-range goals are
+      not relevant.
+
+  - id: q21
+    text: pressure-resistant build-up under heavy pressing
+    filters: {}
+    sequence_hint: RECV@D-C^ CARRY@D-C^ PASS@D-C^ RECV@D-LI^ CARRY@D-LI^ PASS@M-LI+^
+    rubric: >
+      Relevant if at least four tokens carry the '^' under-pressure modifier
+      while the possession still progresses out of the defensive third. Under
+      pressure and losing the ball is not relevant.
+
+  - id: q22
+    text: direct long ball from defence into the final third
+    filters: {}
+    sequence_hint: RECOV@D-C PASS@D-C+ RECV@F-C CARRY@F-C
+    rubric: >
+      Relevant if a single progressive pass starting in a D- zone lands in an
+      F- zone. Sequences that climb the pitch over several passes are not
+      relevant.
+
+  - id: q23
+    text: England attacking the left channel in the final third
+    filters: {team: England, end_band: F}
+    sequence_hint: PASS@M-LI+ RECV@F-LI CARRY@F-LI PASS@F-L RECV@F-L CROSS@F-L>
+    rubric: >
+      Relevant if the team is England (men's) and the possession ends in F-L or
+      F-LI. Ignore England Women's — that is a different team string.
+
+  - id: q24
+    text: Spain patient possession ending in a shot
+    filters: {team: Spain, ended_in_shot: true, min_events: 20}
+    sequence_hint: PASS@M-C RECV@M-C PASS@M-LI RECV@M-LI PASS@M-C RECV@M-RI CARRY@M-RI PASS@F-RI+ RECV@F-C SHOT@F-C
+    rubric: >
+      Relevant if Spain hold the ball for 20+ tokens and finish with a shot.
+      Judge on whether the sequence reads as controlled circulation rather than
+      a scramble.
+
+  - id: q25
+    text: shot from a rebound after a blocked attempt
+    filters: {ended_in_shot: true}
+    sequence_hint: SHOT@F-C RECOV@F-C SHOT@F-C
+    rubric: >
+      Relevant if the possession contains two or more SHOT tokens with a
+      recovery or duel between them. A single shot is not relevant.
+
+  - id: q26
+    text: attack down the right that ends with a shot from the right half-space
+    filters: {ended_in_shot: true, end_zone: F-RI}
+    sequence_hint: PASS@M-R+ RECV@F-R CARRY@F-R PASS@F-RI RECV@F-RI SHOT@F-RI
+    rubric: >
+      Relevant if the possession travels through F-R or M-R and the final token
+      is a shot in F-RI.
+
+  - id: q27
+    text: interception in midfield turned into an immediate attack
+    filters: {}
+    sequence_hint: INT@M-C CARRY@M-C+ PASS@F-C+ RECV@F-C SHOT@F-C
+    rubric: >
+      Relevant if the possession opens with INT in an M- zone and reaches an F-
+      zone within a few tokens. Interceptions followed by a slow rebuild are not
+      relevant.
+
+  - id: q28
+    text: cutback from the byline
+    filters: {ended_in_shot: true}
+    sequence_hint: CARRY@F-R> PASS@F-R> RECV@F-C SHOT@F-C
+    rubric: >
+      Relevant if a pass or carry in a wide final-third zone carries the '>'
+      modifier and is immediately followed by a shot in F-C. Either flank
+      counts.
+
+  - id: q29
+    text: quick one-two through the inside-left channel
+    filters: {}
+    sequence_hint: PASS@M-LI RECV@F-LI PASS@F-LI RECV@F-LI CARRY@F-LI SHOT@F-C
+    rubric: >
+      Relevant if two passes are exchanged within the LI channel in the middle
+      or final third, moving the ball forward. Single passes through the channel
+      are not relevant.
+
+  - id: q30
+    text: high-xG chance created from open play
+    filters: {play_pattern: Regular Play, min_xg: 0.3}
+    sequence_hint: PASS@F-RI> RECV@F-C CARRY@F-C SHOT@F-C
+    rubric: >
+      Relevant if play_pattern is Regular Play and the possession's total xG is
+      at least 0.3. Judge whether the token string plausibly describes a clear
+      chance rather than a speculative effort.

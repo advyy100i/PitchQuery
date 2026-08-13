@@ -1,0 +1,23 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: pitchquery-db
+    environment:
+      POSTGRES_USER: pitchquery
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pitchquery}
+      POSTGRES_DB: pitchquery
+    ports:
+      # 5433 on the host so it never fights a local Postgres install.
+      - "5433:5432"
+    volumes:
+      # Named volume, not a bind mount: keeps the DB out of OneDrive.
+      - pitchquery_pgdata:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pitchquery -d pitchquery"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pitchquery_pgdata:

@@ -1,0 +1,31 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets and local config
+.env
+
+# Data and build artefacts. Raw StatsBomb JSON, the pickled TF-IDF index and
+# the trained models all live outside the repo (see PITCHQUERY_DATA) — they are
+# several GB and fully reproducible from the ingest scripts.
+data/
+*.pkl
+*.npz
+*.parquet
+
+# Editor / tooling
+.history/
+.vscode/
+.idea/
+
+# Web
+node_modules/
+.next/
+out/
+
+# Personal working notes, not part of the project.
+# Delete these two lines if you want the original build plan in the repo.
+plan.MD
+cost_restriction.txt
