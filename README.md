@@ -5,8 +5,9 @@ passage of play in English — or draw its shape on a pitch — and get back ran
 animated clips, with a scouting note whose every claim links to the clips it was
 computed from.
 
-**[pitch-query.vercel.app](https://pitch-query.vercel.app)** ·
-[API](https://pitchquery-api.onrender.com/health)
+Live Link: **[pitch-query.vercel.app](https://pitch-query.vercel.app)** 
+
+Backend Deployed on: [API](https://pitchquery-api.onrender.com/health)
 
 > The hosted API sleeps after 15 minutes idle and takes ~50 s to wake. Open
 > [`/health`](https://pitchquery-api.onrender.com/health) first if you want it
@@ -53,28 +54,13 @@ Full write-ups: [retrieval](docs/retrieval_eval.md) ·
 
 ## How it works
 
-```
-StatsBomb open data ──▶ Postgres ──▶ zone grid + token grammar
-                                          │
-                        ┌─────────────────┼──────────────────┐
-                        ▼                 ▼                  ▼
-                  sparse TF-IDF     dense MiniLM        shape match
-                  (1-3 grams)       (pgvector)          (zone_path)
-                        └────────┬────────┘                  │
-                            RRF fusion                       │
-                                 └──────────┬────────────────┘
-                                            ▼
-                                   FastAPI ──▶ Next.js
-```
+<img width="2720" height="2640" alt="possession_search_architecture" src="https://github.com/user-attachments/assets/efa3c625-1f24-4744-b2a1-e9f4234cb9f8" />
+
 
 Hard filters run in SQL first and ranking happens second — never the reverse.
 Ranking the whole corpus and filtering afterwards means a query for one team's
 corners comes back with another team's open play once the filter eats the top
 results.
-
-[`ARCHITECTURE.txt`](ARCHITECTURE.txt) has the full diagram: the ingest
-pipeline, the deployed topology, what crosses each boundary, and the provenance
-of every number above.
 
 ---
 
