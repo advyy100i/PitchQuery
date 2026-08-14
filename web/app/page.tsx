@@ -97,7 +97,7 @@ export default function Page() {
         <div>
           <h1>PitchQuery</h1>
           <p className="lede">
-            Tactical possession search over open football data.
+            Tactical possession search over open football data.  (Initial load may take 20–30 seconds)
           </p>
         </div>
         <dl className="stats">
