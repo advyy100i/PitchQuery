@@ -3,50 +3,32 @@
 import type { ShotXG } from "../lib/api";
 
 /**
- * The two xG models on the same shot, with the context that separates them.
+ * This project's xG model on the shot the possession ends in.
  *
- * Three things this panel is careful about:
+ * Only our number is shown. StatsBomb's is in the API response and drives the
+ * benchmark in docs/benchmark.md, but a second figure here would turn every
+ * clip into a scoreboard — and a single shot cannot settle which model is
+ * better. A 0.15 chance that goes in is not evidence against 0.15. That
+ * question needs thousands of shots and a log-loss, not a side-by-side.
  *
- * 1. The bars share one scale. Showing each against its own maximum would make
- *    a 0.04 chance and a 0.4 chance look alike, and the whole point is the gap
- *    between the two numbers.
+ * The bar runs 0 to 1, because that is what a probability is. Rescaling it to
+ * make small chances look bigger would be flattering the number rather than
+ * reporting it.
  *
- * 2. It says whether the shot was held out of training. Most shots a visitor
- *    clicks come from competitions the model learned from, where agreeing with
- *    StatsBomb proves nothing. Presenting those identically to genuinely
- *    out-of-sample shots would flatter the model, so the badge distinguishes
- *    them.
+ * Two things it will not do:
  *
- * 3. It never invents a number. Penalties are excluded from training, so the
- *    model declines and the panel says why rather than showing a blank.
+ * - Invent a value. Penalties are excluded from training, so the model declines
+ *   and the panel says why rather than showing a blank.
  *
- * Deliberately absent: any claim about which model is "right" on a single shot.
- * One shot cannot settle that — a 0.15 chance that goes in is not evidence
- * against 0.15. The aggregate answer lives in docs/benchmark.md.
+ * - Imply a prediction is out of sample when it is not. Most shots a visitor
+ *   clicks come from competitions the model learned from; the badge separates
+ *   those from the two tournaments it never saw.
  */
 
 type Props = { shot: ShotXG };
 
-function Bar({ label, value, scale, tone }:
-             { label: string; value: number; scale: number; tone: string }) {
-  return (
-    <div className="xg-row">
-      <span className="xg-label">{label}</span>
-      <span className="xg-track">
-        <span className={`xg-fill ${tone}`}
-              style={{ width: `${Math.max(1.5, (value / scale) * 100)}%` }} />
-      </span>
-      <span className="xg-value">{value.toFixed(3)}</span>
-    </div>
-  );
-}
-
 export default function ShotPanel({ shot }: Props) {
   const mine = shot.my_xg;
-  const sb = shot.statsbomb_xg;
-
-  // A shared ceiling, with a floor so ordinary chances are not hairlines.
-  const scale = Math.max(0.3, mine ?? 0, sb ?? 0);
 
   const context: string[] = [];
   if (shot.distance != null) context.push(`${shot.distance.toFixed(1)} m out`);
@@ -65,38 +47,42 @@ export default function ShotPanel({ shot }: Props) {
       <div className="xg-head">
         <h3>Expected goals</h3>
         {shot.in_holdout === true && (
-          <span className="badge holdout" title="This competition was excluded from training entirely">
+          <span className="badge holdout"
+                title="This competition was excluded from training entirely">
             held out of training
           </span>
         )}
         {shot.in_holdout === false && (
-          <span className="badge muted-badge" title="The model trained on this competition, so agreement here is not evidence">
+          <span className="badge muted-badge"
+                title="The model trained on this competition, so this is a fit, not a test">
             in training data
           </span>
         )}
       </div>
 
       {mine != null ? (
-        <Bar label="This model" value={mine} scale={scale} tone="mine" />
-      ) : (
-        <div className="xg-row">
-          <span className="xg-label">This model</span>
-          <span className="xg-declined muted small">{shot.my_xg_note ?? "no prediction"}</span>
+        <div className="xg-single">
+          <span className="xg-big">{mine.toFixed(2)}</span>
+          <span className="xg-track">
+            <span className="xg-fill" style={{ width: `${Math.max(1.5, mine * 100)}%` }} />
+          </span>
         </div>
+      ) : (
+        <p className="xg-declined muted small">{shot.my_xg_note ?? "no prediction"}</p>
       )}
 
-      {sb != null && <Bar label="StatsBomb" value={sb} scale={scale} tone="theirs" />}
-
       <p className="xg-context muted small">
-        {shot.player && <><strong>{shot.player}</strong>{shot.minute != null && `, ${shot.minute}'`}. </>}
+        {shot.player && (
+          <><strong>{shot.player}</strong>{shot.minute != null && `, ${shot.minute}'`}. </>
+        )}
         {shot.is_goal ? "Scored. " : "Did not score. "}
         {context.length > 0 && `${context.join(", ")}.`}
       </p>
 
       <p className="muted small">
-        LightGBM on shot geometry plus freeze-frame context, calibrated and held
-        out by whole tournaments. One shot settles nothing either way — the
-        aggregate comparison is in the benchmark.
+        LightGBM on shot geometry plus freeze-frame context — defenders in the
+        shooting cone, where the keeper is — calibrated, and held out by whole
+        tournaments rather than by shot.
       </p>
     </section>
   );

@@ -673,9 +673,7 @@ input:focus {
 
 /* ---------- xG panel ------------------------------------------------------- */
 
-/* Two bars on one scale. The comparison IS the content, so the two tones are
-   deliberately close in weight — the accent does not get to look like the
-   winner before the reader has decided anything. */
+/* One number, on a 0-1 scale, because that is what a probability is. */
 
 .xg-panel {
   margin-top: 14px;
@@ -703,12 +701,20 @@ input:focus {
                      border: 1px solid var(--line); text-transform: none;
                      letter-spacing: 0; font-weight: 500; }
 
-.xg-row { display: grid; grid-template-columns: 82px 1fr 52px; align-items: center;
-          gap: 10px; margin-bottom: 7px; }
+.xg-single { display: flex; align-items: center; gap: 14px; }
 
-.xg-label { font-size: 12px; color: var(--ink-soft); }
+.xg-big {
+  font-family: var(--font-display);
+  font-size: 32px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
 
 .xg-track {
+  flex: 1;
   height: 7px;
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--line) 55%, transparent);
@@ -716,14 +722,9 @@ input:focus {
 }
 
 .xg-fill { display: block; height: 100%; border-radius: var(--radius-pill);
-           transition: width 0.35s var(--ease); }
-.xg-fill.mine { background: var(--accent); }
-.xg-fill.theirs { background: var(--faint); }
+           background: var(--accent); transition: width 0.35s var(--ease); }
 
-.xg-value { font-family: var(--font-code); font-size: 12px; color: var(--ink-soft);
-            text-align: right; font-variant-numeric: tabular-nums; }
-
-.xg-declined { grid-column: 2 / -1; font-style: italic; }
+.xg-declined { margin: 0; font-style: italic; }
 
 .xg-context { margin: 12px 0 6px; line-height: 1.6; }
 .xg-panel > p:last-child { margin: 0; padding-top: 9px;

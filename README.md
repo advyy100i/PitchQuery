@@ -117,9 +117,11 @@ written: a sentence counting goals was citing every shot.
 
 ### The xG model is deployed as arithmetic, not as a pickle.
 
-Every possession that ends in a shot shows both models side by side, and says
-whether that competition was held out of training — because agreeing with
-StatsBomb on data you trained on is not evidence of anything.
+Every possession that ends in a shot is scored by the model, and the panel says
+whether that competition was held out of training — a good number on data the
+model learned from is a fit, not a test. The comparison with StatsBomb belongs
+in the [benchmark](docs/benchmark.md) over thousands of shots, not next to one
+clip, where a 0.15 chance going in says nothing either way.
 
 Training produces a `CalibratedClassifierCV` around three LightGBM boosters.
 Shipping that pickle would mean pinning scikit-learn and pandas on the server to
