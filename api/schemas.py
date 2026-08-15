@@ -95,32 +95,54 @@ class FreezeFramePlayer(BaseModel):
     keeper: bool = False
 
 
+class ShotXG(BaseModel):
+    """Both xG values side by side, plus the context that separates them.
+
+    `my_xg` is null rather than absent when the model declines to answer —
+    penalties, or a shot with no geometry — so the UI can say why instead of
+    rendering a gap. `n_def_in_cone` and the two keeper columns are the
+    freeze-frame features StatsBomb's model sees and a distance-and-angle
+    baseline does not; they are here because they are the interesting half of
+    any disagreement.
+    """
+    event_id: str
+    player: Optional[str] = None
+    minute: Optional[int] = None
+    distance: float
+    angle: float
+    body_part: Optional[str] = None
+    shot_type: Optional[str] = None
+    is_goal: bool
+    statsbomb_xg: Optional[float] = None
+    my_xg: Optional[float] = None
+    my_xg_note: Optional[str] = Field(
+        default=None, description="why my_xg is null, when it is")
+    in_holdout: Optional[bool] = Field(
+        default=None,
+        description="whether this shot's competition was held out of training — "
+                    "the difference between a prediction and a memory")
+    n_def_in_cone: Optional[int] = None
+    dist_nearest_def: Optional[float] = None
+    gk_dist_to_goal: Optional[float] = None
+    gk_off_line: Optional[float] = None
+
+
 class PossessionDetail(BaseModel):
     summary: PossessionSummary
     events: list[EventPoint]
     freeze_frame: list[FreezeFramePlayer] = Field(
         default_factory=list,
         description="player positions at the shot, when the possession ends in one")
+    shot: Optional[ShotXG] = Field(
+        default=None,
+        description="the shot this possession ends in, scored by both models")
 
 
-class ShotComparison(BaseModel):
-    """Both xG values side by side — the point of the whole benchmark."""
-    event_id: str
+class ShotComparison(ShotXG):
+    """One shot on its own, with everything needed to draw it."""
     match_id: int
     team: Optional[str] = None
-    player: Optional[str] = None
     x: float
     y: float
-    distance: float
-    angle: float
-    body_part: Optional[str] = None
-    shot_type: Optional[str] = None
     play_pattern: Optional[str] = None
-    is_goal: bool
-    statsbomb_xg: Optional[float] = None
-    my_xg: Optional[float] = None
-    n_def_in_cone: Optional[int] = None
-    dist_nearest_def: Optional[float] = None
-    gk_dist_to_goal: Optional[float] = None
-    gk_off_line: Optional[float] = None
     freeze_frame: list[FreezeFramePlayer] = Field(default_factory=list)

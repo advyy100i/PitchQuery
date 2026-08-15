@@ -58,9 +58,9 @@ diagram in any tool without opening the code.
    ┌────────────────────────┐                  ┌──────────────────────────┐
    │ core/planner.py        │                  │ docs/benchmark.md        │
    │ English → filters      │                  │ calibration.png          │
-   │ rules, no LLM, ~1 ms   │                  └──────────────────────────┘
-   └───────────┬────────────┘
-               ▼
+   │ rules, no LLM, ~1 ms   │                  │ xg_portable.json.gz      │
+   └───────────┬────────────┘                  │   599 KB → the API       │
+               ▼                               └──────────────────────────┘
    ┌────────────────────────┐     ┌──────────────────────────────────────┐
    │ core/notes.py          │     │ EVALUATION                           │
    │ claims computed FROM   │     │ eval/queries.yaml   30 queries        │
@@ -96,9 +96,10 @@ diagram in any tool without opening the code.
    │ NEXT_PUBLIC_API_  │        │ DATABASE_URL         │      │ 424 MB used  │
    │ URL               │        │ PITCHQUERY_CORS_ORI. │      │              │
    │                   │        │ PITCHQUERY_DENSE=0   │      │              │
+   │                   │        │ PITCHQUERY_XG=1      │      │              │
    └───────────────────┘        └──────────────────────┘      └──────────────┘
 
-   Three deliberate choices:
+   Four deliberate choices:
 
    * Render is pinned to Ohio to sit beside Neon's us-east-2. A cross-region
      pair adds ~60 ms to every query and these endpoints issue several.
@@ -111,6 +112,11 @@ diagram in any tool without opening the code.
 
    * No build artefact is uploaded. The TF-IDF index is fitted from the
      database at startup (~2 s), so it cannot drift from the data it indexes.
+
+   * The xG model ships in the repo, but not as a pickle. A pickle would tie
+     the server's scikit-learn and pandas to whatever wrote it; the exported
+     form is LightGBM's own text format plus a two-parameter sigmoid, read
+     with numpy. 599 KB on disk, 7 MB resident, and no version lock.
 
 
 --------------------------------------------------------------------------------
@@ -208,6 +214,14 @@ diagram in any tool without opening the code.
                           from 252 MB to 570 MB, past Render's 512 MB. /health
                           reports "sparse only" rather than implying fusion.
 
+  No pickle on the       The trained model is re-serialised by
+  serving path.          models/export_xg_portable.py and verified against the
+                         pickle on every shot in the corpus, with exact
+                         equality required. The failure it guards against is
+                         silent: scikit-learn calibrates lightgbm's raw margin,
+                         and calibrating the probability instead returns values
+                         between 0.43 and 0.62 that pass every smoke test.
+
 
 --------------------------------------------------------------------------------
 7. KNOWN DEFECT
@@ -237,8 +251,9 @@ diagram in any tool without opening the code.
               · 05 embed
   core/       zones (grid + grammar) · features (shot geometry) · retrieval
               (filters, sparse, dense, shape, RRF) · planner (English → query)
-              · notes (cited claims) · db · config
-  models/     train_xg · evaluate_xg
+              · notes (cited claims) · xg (serving scorer) · db · config
+  models/     train_xg · evaluate_xg · export_xg_portable
+              · xg_portable.json.gz (the served model, committed)
   eval/       queries.yaml · paraphrases.yaml · judge · audit · score_retrieval
               · score_planner
   api/        main (FastAPI) · schemas
@@ -247,6 +262,7 @@ diagram in any tool without opening the code.
   deploy/     schema_deploy.sql · export_to_neon.py
   sql/        001_schema · 002_indexes
   tests/      test_notes (citations cannot be wrong) · test_shape
+              · test_xg_portable (the served model IS the measured model)
 
   Data source: StatsBomb Open Data, used under their open-data licence.
 ================================================================================

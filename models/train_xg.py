@@ -195,7 +195,14 @@ def main():
     pred_path = INDEX_DIR / "xg_test_predictions.csv"
     out.to_csv(pred_path, index=False)
 
-    print(f"\nwrote {MODEL_PATH.name} and {pred_path.name}")
+    # Immediately re-export to the deployable format. Chained here rather than
+    # left as a separate command because the two artefacts describe the same
+    # model: if training can write one without the other, the hosted API will
+    # eventually serve a model nobody evaluated.
+    from models.export_xg_portable import export
+    portable = export(MODEL_PATH)
+
+    print(f"\nwrote {MODEL_PATH.name}, {pred_path.name} and {portable.name}")
 
     # A calibrated model wraps the booster, so importances come from a plain
     # LightGBM refit on the same features — reported for interpretation only.

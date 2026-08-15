@@ -13,7 +13,6 @@ Run:
   open http://localhost:8000/docs
 """
 import os
-import pickle
 import sys
 import time
 from contextlib import asynccontextmanager
@@ -27,12 +26,13 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from api.schemas import (EventPoint, FreezeFramePlayer, NoteClaim,  # noqa: E402
                          PlanResponse, PlanTerm, PossessionDetail,
-                         PossessionSummary, SearchResponse, ShotComparison)
+                         PossessionSummary, SearchResponse, ShotComparison,
+                         ShotXG)
 from core import db  # noqa: E402
-from core.config import INDEX_DIR  # noqa: E402
 from core.notes import scouting_note  # noqa: E402
 from core.planner import Vocabulary, plan as plan_query  # noqa: E402
 from core.retrieval import Filters, Retriever, hydrate  # noqa: E402
+from core.xg import XGModel  # noqa: E402
 
 STATE: dict = {}
 
@@ -58,6 +58,12 @@ DENSE_ENABLED = _flag("PITCHQUERY_DENSE", True)
 # with headroom; on a 512 MB box, let the first drawn query pay for it instead.
 PRELOAD_SHAPES = _flag("PITCHQUERY_PRELOAD_SHAPES", True)
 
+# The xG model. Unlike the dense ranker this one DOES fit a free tier — the
+# exported artefact is 599 KB and lightgbm adds ~20 MB resident, against torch's
+# several hundred. The switch exists so a memory-starved deployment has
+# something to turn off before it starts dropping retrieval features.
+XG_ENABLED = _flag("PITCHQUERY_XG", True)
+
 # The 15 zones of the grid, for validating a drawn shape.
 VALID_ZONES = {f"{b}-{c}" for b in ("D", "M", "F")
                for c in ("L", "LI", "C", "RI", "R")}
@@ -78,13 +84,31 @@ async def lifespan(app: FastAPI):
     # fast as the hundredth.
     if PRELOAD_SHAPES:
         STATE["retriever"].load_shapes(STATE["conn"])
-    try:
-        with open(INDEX_DIR / "xg_models.pkl", "rb") as f:
-            STATE["xg"] = pickle.load(f)
-    except FileNotFoundError:
-        STATE["xg"] = None            # /shot still works, just without my_xg
+    STATE["xg"], STATE["xg_status"] = _load_xg()
     yield
     STATE["conn"].close()
+
+
+def _load_xg():
+    """The xG model, or None and the reason why.
+
+    Deliberately non-fatal. The model is one panel of one view; retrieval is the
+    product. An API that refuses to boot because a 599 KB file is missing would
+    trade a degraded feature for a total outage, so the failure is reported on
+    /health and the UI says the model is unavailable rather than showing a blank
+    where a number should be.
+    """
+    if not XG_ENABLED:
+        return None, "disabled by PITCHQUERY_XG=0"
+    try:
+        model = XGModel.load()
+        return model, f"loaded (trained with lightgbm {model.trained_with.get('lightgbm', '?')})"
+    except FileNotFoundError:
+        return None, "models/xg_portable.json.gz not found — run models/train_xg.py"
+    except ImportError:
+        return None, "lightgbm is not installed"
+    except Exception as exc:                       # a corrupt or future artefact
+        return None, f"{type(exc).__name__}: {exc}"
 
 
 app = FastAPI(title="PitchQuery", version="0.1",
@@ -160,6 +184,72 @@ def parse_freeze_frame(ff) -> list:
     return out
 
 
+# The columns the xG model reads, plus the ones worth showing beside it. Listed
+# explicitly for the same reason models/train_xg.py does: a `SELECT *` here is
+# how statsbomb_xg would eventually find its way into the feature dict.
+SHOT_COLS = """s.event_id, s.match_id, s.competition_id, s.season_id, s.team,
+               s.player, s.x, s.y, s.distance, s.angle, s.body_part,
+               s.technique, s.shot_type, s.first_time, s.under_pressure,
+               s.play_pattern, s.is_goal, s.statsbomb_xg, s.n_def_in_cone,
+               s.dist_nearest_def, s.gk_dist_to_goal, s.gk_off_line"""
+
+# The clock lives on the event, not the shot — the shots table carries features,
+# not chronology. Joined on the primary key, so it costs nothing.
+SHOT_FROM = "FROM shots s JOIN events e ON e.event_id = s.event_id"
+
+
+def shot_rows(conn, event_ids: list[str]) -> dict:
+    """Fetch shots by event id, keyed by id."""
+    if not event_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {SHOT_COLS}, e.minute {SHOT_FROM} "
+                    "WHERE s.event_id = ANY(%s)", (event_ids,))
+        cols = [d.name for d in cur.description]
+        return {str(r[0]): dict(zip(cols, r)) for r in cur.fetchall()}
+
+
+def score(s: dict) -> tuple:
+    """(my_xg, reason it is null). The model never guesses silently."""
+    model = STATE.get("xg")
+    if model is None:
+        return None, STATE.get("xg_status", "model not loaded")
+    value = model.predict_one(s)
+    if value is not None:
+        return value, None
+    if s.get("shot_type") == "Penalty":
+        # Not a gap in the model — an exclusion it was trained under.
+        return None, "penalties are excluded from training"
+    return None, "no shot geometry recorded"
+
+
+def held_out(s: dict) -> Optional[bool]:
+    """Was this shot's competition kept out of training?
+
+    Worth surfacing rather than assuming. Most shots a visitor clicks come from
+    competitions the model trained on, where a good number proves nothing. The
+    two tournaments it never saw are where the comparison with StatsBomb is
+    actually a test, and the UI should be able to say which is which instead of
+    presenting every prediction as though it were out of sample.
+    """
+    model = STATE.get("xg")
+    if model is None or s.get("competition_id") is None:
+        return None
+    return f"{s['competition_id']}:{s['season_id']}" in model.test_comps
+
+
+def shot_xg(s: dict) -> ShotXG:
+    my_xg, note = score(s)
+    return ShotXG(
+        event_id=str(s["event_id"]), player=s["player"], minute=s["minute"],
+        distance=s["distance"], angle=s["angle"], body_part=s["body_part"],
+        shot_type=s["shot_type"], is_goal=bool(s["is_goal"]),
+        statsbomb_xg=s["statsbomb_xg"], my_xg=my_xg, my_xg_note=note,
+        in_holdout=held_out(s),
+        n_def_in_cone=s["n_def_in_cone"], dist_nearest_def=s["dist_nearest_def"],
+        gk_dist_to_goal=s["gk_dist_to_goal"], gk_off_line=s["gk_off_line"])
+
+
 @app.get("/health")
 def health():
     conn = dbc()
@@ -168,7 +258,10 @@ def health():
         n = cur.fetchone()[0]
     return {"ok": True, "possessions": n,
             "sparse_index": len(STATE["retriever"].uids),
-            "xg_models": STATE["xg"] is not None,
+            "xg_model": STATE["xg"] is not None,
+            # Say why, not just no. A deployment reporting false with no reason
+            # is a support question; this answers it in the same response.
+            "xg_status": STATE.get("xg_status", "not initialised"),
             "planner": "rules",
             "teams_known": len(STATE["vocab"].teams),
             # Say which rankers are actually live rather than implying fusion.
@@ -343,7 +436,8 @@ def possession(uid: str):
 
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT e.idx, e.period, e.minute, e.second, e.type, e.player, e.team, "
+            "SELECT e.event_id, e.idx, e.period, e.minute, e.second, e.type, "
+            "       e.player, e.team, "
             "       e.x, e.y, e.end_x, e.end_y, e.duration, e.under_pressure, "
             "       e.possession_team, e.token, s.freeze_frame "
             "FROM events e LEFT JOIN shots s ON s.event_id = e.event_id "
@@ -353,7 +447,7 @@ def possession(uid: str):
         cols = [d.name for d in cur.description]
         evs = [dict(zip(cols, r)) for r in cur.fetchall()]
 
-    points, freeze = [], []
+    points, freeze, last_shot_id = [], [], None
     for e in evs:
         attacking = e["team"] == e["possession_team"]
         # StatsBomb records EVERY event as if the acting team attacks left->right.
@@ -374,52 +468,41 @@ def possession(uid: str):
             is_attacking=attacking, x=x, y=y, end_x=ex, end_y=ey,
             duration=e["duration"], under_pressure=bool(e["under_pressure"]),
             token=e["token"] if attacking else None))
-        if e["type"] == "Shot" and e["freeze_frame"]:
-            freeze = parse_freeze_frame(e["freeze_frame"])
+        if e["type"] == "Shot":
+            # The last shot, matching the freeze frame that gets drawn. A
+            # possession can contain several — a save and a rebound — and the
+            # animation ends on the final one.
+            last_shot_id = str(e["event_id"])
+            if e["freeze_frame"]:
+                freeze = parse_freeze_frame(e["freeze_frame"])
 
-    return PossessionDetail(summary=summary(row), events=points, freeze_frame=freeze)
+    shot = None
+    if last_shot_id:
+        got = shot_rows(conn, [last_shot_id]).get(last_shot_id)
+        if got:
+            shot = shot_xg(got)
+
+    return PossessionDetail(summary=summary(row), events=points,
+                            freeze_frame=freeze, shot=shot)
 
 
 @app.get("/shot/{event_id}", response_model=ShotComparison)
 def shot(event_id: str):
     """My xG and StatsBomb's, side by side, for one shot."""
-    with dbc().cursor() as cur:
-        cur.execute(
-            "SELECT event_id, match_id, team, player, x, y, distance, angle, body_part, "
-            "       technique, shot_type, play_pattern, first_time, under_pressure, "
-            "       is_goal, statsbomb_xg, freeze_frame, n_def_in_cone, dist_nearest_def, "
-            "       gk_dist_to_goal, gk_off_line "
-            "FROM shots WHERE event_id = %s", (event_id,))
+    conn = dbc()
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT {SHOT_COLS}, e.minute, s.freeze_frame {SHOT_FROM} "
+                    "WHERE s.event_id = %s", (event_id,))
         got = cur.fetchone()
         if not got:
             raise HTTPException(404, f"no shot {event_id}")
         cols = [d.name for d in cur.description]
     s = dict(zip(cols, got))
 
-    my_xg = None
-    if STATE["xg"] is not None and s["shot_type"] != "Penalty":
-        import pandas as pd
-
-        from models.train_xg import BOOLEAN, CATEGORICAL, CONTEXT_NUMERIC, NUMERIC
-
-        blob = STATE["xg"]
-        frame = pd.DataFrame([s])
-        X = frame[NUMERIC + CONTEXT_NUMERIC].astype(float).copy()
-        for c in BOOLEAN:
-            X[c] = int(bool(frame[c].iloc[0]))
-        for c in CATEGORICAL:
-            X[c] = pd.Categorical(frame[c], categories=blob["categories"][c]).codes
-            X[c] = X[c].astype("category")
-        X = X[blob["features"]]
-        my_xg = float(blob["mine"].predict_proba(X)[0, 1])
-
     return ShotComparison(
-        event_id=str(s["event_id"]), match_id=s["match_id"], team=s["team"],
-        player=s["player"], x=s["x"], y=s["y"], distance=s["distance"], angle=s["angle"],
-        body_part=s["body_part"], shot_type=s["shot_type"], play_pattern=s["play_pattern"],
-        is_goal=bool(s["is_goal"]), statsbomb_xg=s["statsbomb_xg"], my_xg=my_xg,
-        n_def_in_cone=s["n_def_in_cone"], dist_nearest_def=s["dist_nearest_def"],
-        gk_dist_to_goal=s["gk_dist_to_goal"], gk_off_line=s["gk_off_line"],
+        **shot_xg(s).model_dump(),
+        match_id=s["match_id"], team=s["team"], x=s["x"], y=s["y"],
+        play_pattern=s["play_pattern"],
         freeze_frame=parse_freeze_frame(s["freeze_frame"]))
 
 

@@ -6,6 +6,7 @@ import QueryBar from "../components/QueryBar";
 import ResultCard from "../components/ResultCard";
 import ScoutingNote from "../components/ScoutingNote";
 import ShapePicker from "../components/ShapePicker";
+import ShotPanel from "../components/ShotPanel";
 import {
   type Filters, type Meta, type PossessionDetail, type SearchResponse,
   ask, byShape, meta as fetchMeta, possession, search, similar,
@@ -178,6 +179,7 @@ export default function Page() {
               <Pitch events={detail.events} freezeFrame={detail.freeze_frame}
                      endedInGoal={detail.summary.ended_in_goal} />
               <code className="tokens block">{detail.summary.token_string}</code>
+              {detail.shot && <ShotPanel shot={detail.shot} />}
             </>
           ) : (
             <p className="muted">Select a result to watch it.</p>

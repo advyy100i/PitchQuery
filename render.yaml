@@ -44,6 +44,15 @@ services:
       - key: PITCHQUERY_PRELOAD_SHAPES
         value: "1"
 
+      # The xG model IS served. Unlike the dense ranker it costs almost nothing:
+      # models/xg_portable.json.gz is 599 KB and ships in the repo, and lightgbm
+      # takes resident memory from 264 MB to 271 MB. The model was exported out
+      # of its pickle into LightGBM's own text format precisely so that hosting
+      # it does not mean pinning scikit-learn and pandas to a laptop's versions.
+      # Set to 0 to drop it if the box ever runs short.
+      - key: PITCHQUERY_XG
+        value: "1"
+
       - key: DATABASE_URL
         sync: false
       - key: PITCHQUERY_CORS_ORIGINS

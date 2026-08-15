@@ -47,7 +47,7 @@ pressure. That string is what gets indexed, ranked and searched.
 | | | how it was measured |
 |---|---|---|
 | **Retrieval** | P@5 **0.608**, MRR 0.751, p50 36 ms / p95 123 ms | 30 queries, relevance from per-query rubrics written *before* any results were seen; **87% agreement** with a human on a blind 71-item audit |
-| **xG model** | closes **76%** of the log-loss gap to StatsBomb's production model | held out the 2022 World Cup and 2023 Women's World Cup entirely; split by competition, never by shot |
+| **xG model** | closes **76%** of the log-loss gap to StatsBomb's production model, and is live in the demo | held out the 2022 World Cup and 2023 Women's World Cup entirely; split by competition, never by shot |
 | **Query parsing** | **1 ms**, no LLM, no API key | 24/30 filter agreement with hand-written queries, and it holds on a held-out paraphrase set |
 
 Full write-ups: [retrieval](docs/retrieval_eval.md) ·
@@ -68,7 +68,7 @@ results.
 
 ---
 
-## Three decisions worth explaining
+## Four decisions worth explaining
 
 ### The dense ranker was supposed to lose. It didn't.
 
@@ -115,6 +115,26 @@ Claim(f"{len(goals)} of the {n} are scored", uids=[r["possession_uid"] for r in 
 `tests/test_notes.py` enforces it, and caught a real violation while being
 written: a sentence counting goals was citing every shot.
 
+### The xG model is deployed as arithmetic, not as a pickle.
+
+Every possession that ends in a shot shows both models side by side, and says
+whether that competition was held out of training — because agreeing with
+StatsBomb on data you trained on is not evidence of anything.
+
+Training produces a `CalibratedClassifierCV` around three LightGBM boosters.
+Shipping that pickle would mean pinning scikit-learn and pandas on the server to
+whatever a laptop happened to have. So it is re-serialised into what it actually
+is — three ensembles in LightGBM's own text format, a two-parameter sigmoid on
+each — and the whole thing is **599 KB gzipped, committed to the repo, and
+scored with numpy**. Serving it costs 7 MB of resident memory.
+
+The translation is hand-written, so `tests/test_xg_portable.py` scores all
+10,858 non-penalty shots both ways and requires exact equality. It earns its
+place: scikit-learn calibrates lightgbm's *raw margin*, not its probability, and
+calibrating the probability instead returns values wedged between 0.43 and 0.62
+— all of which look like believable xG on a page while being wrong on every
+shot.
+
 ---
 
 ## Draw a possession instead of describing one
@@ -157,7 +177,8 @@ documented rather than hidden.
 
 **The hosted demo runs sparse-only.** torch is ~2.5 GB installed and takes
 resident memory from 252 MB to 570 MB, past the free tier's 512 MB. `/health`
-reports `"rankers": "sparse only"` rather than implying it is still fusing.
+reports `"rankers": "sparse only"` rather than implying it is still fusing. The
+xG model is unaffected and does run there — it is 599 KB and 7 MB resident.
 
 ---
 

@@ -24,6 +24,7 @@ data/
 node_modules/
 .next/
 out/
+*.tsbuildinfo
 
 # Personal working notes, not part of the project.
 # Delete these two lines if you want the original build plan in the repo.

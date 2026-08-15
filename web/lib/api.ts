@@ -63,10 +63,33 @@ export type EventPoint = {
 
 export type FreezeFramePlayer = { x: number; y: number; teammate: boolean; keeper: boolean };
 
+/** The shot a possession ends in, scored by both models. */
+export type ShotXG = {
+  event_id: string;
+  player: string | null;
+  minute: number | null;
+  distance: number;
+  angle: number;
+  body_part: string | null;
+  shot_type: string | null;
+  is_goal: boolean;
+  statsbomb_xg: number | null;
+  my_xg: number | null;
+  /** Why my_xg is null, when it is. Penalties are excluded from training. */
+  my_xg_note: string | null;
+  /** True when this competition was held out of training entirely. */
+  in_holdout: boolean | null;
+  n_def_in_cone: number | null;
+  dist_nearest_def: number | null;
+  gk_dist_to_goal: number | null;
+  gk_off_line: number | null;
+};
+
 export type PossessionDetail = {
   summary: PossessionSummary;
   events: EventPoint[];
   freeze_frame: FreezeFramePlayer[];
+  shot: ShotXG | null;
 };
 
 export type Filters = {

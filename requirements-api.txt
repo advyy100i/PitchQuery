@@ -5,9 +5,11 @@
 # runs sparse + shape + planner, reporting `"rankers": "sparse only"` on /health
 # rather than pretending it is still fusing two rankers.
 #
-# Also absent: pandas and lightgbm. They are needed only to score a single shot
-# with the trained xG model, which is imported inside that one endpoint. Without
-# them /shot still returns StatsBomb's xG and the geometry, with my_xg null.
+# Also absent: pandas. The xG model used to be a pickle fitted on a pandas
+# frame, so serving one shot meant rebuilding that frame — ~70 MB resident for
+# twelve numbers. models/export_xg_portable.py re-serialises the model to
+# LightGBM's own text format plus a two-parameter sigmoid, so scoring is numpy
+# and nothing else.
 #
 # Local development uses requirements.txt + requirements-ml.txt instead.
 
@@ -19,3 +21,8 @@ python-dotenv>=1.0
 # Retrieval: the TF-IDF index is fitted from the database at startup.
 numpy>=1.26
 scikit-learn>=1.4
+
+# xG: reads models/xg_portable.json.gz, which ships in the repo. Unpinned on
+# purpose — the artefact is LightGBM's documented text format, which newer
+# releases load, so this is not the version-locked dependency a pickle would be.
+lightgbm>=4.0

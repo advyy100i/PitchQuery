@@ -20,4 +20,12 @@ services:
       retries: 10
 
 volumes:
+  # Pinned to its real name. The project was renamed from "chalkline" to
+  # PitchQuery, and renaming the volume key alongside it silently pointed
+  # compose at a fresh empty volume — `docker compose up` then came back healthy
+  # with an empty database while 4.9 GB of ingested events sat in the old one.
+  # Docker cannot rename a volume, and copying 4.9 GB inside a WSL2 disk image
+  # that never shrinks is a poor trade for a tidier string, so the historical
+  # name is pinned here and the key stays current.
   pitchquery_pgdata:
+    name: tactic_retrieval_chalkline_pgdata
