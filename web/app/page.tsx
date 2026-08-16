@@ -179,7 +179,9 @@ export default function Page() {
               <Pitch events={detail.events} freezeFrame={detail.freeze_frame}
                      endedInGoal={detail.summary.ended_in_goal} />
               <code className="tokens block">{detail.summary.token_string}</code>
-              {detail.shots.length > 0 && <ShotPanel shots={detail.shots} />}
+              {/* Optional chaining is load-bearing: an API deployed a few
+                  minutes behind this page does not send `shots` yet. */}
+              {detail.shots?.length ? <ShotPanel shots={detail.shots} /> : null}
             </>
           ) : (
             <p className="muted">Select a result to watch it.</p>

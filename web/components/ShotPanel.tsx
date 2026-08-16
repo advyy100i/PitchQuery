@@ -26,7 +26,7 @@ import type { ShotXG } from "../lib/api";
  * model declines and the panel says why rather than showing a blank.
  */
 
-type Props = { shots: ShotXG[] };
+type Props = { shots?: ShotXG[] };
 
 /** How far this model sits from StatsBomb on this shot, in words. */
 function difference(mine: number, theirs: number): string {
@@ -54,7 +54,9 @@ function describe(shot: ShotXG): string {
 }
 
 export default function ShotPanel({ shots }: Props) {
-  if (!shots.length) return null;
+  // Renders nothing rather than throwing when the possession has no shots, or
+  // when the API is a deploy behind and has not sent the field at all.
+  if (!shots?.length) return null;
 
   const last = shots[shots.length - 1];
   const earlier = shots.slice(0, -1);

@@ -92,8 +92,19 @@ export type PossessionDetail = {
   summary: PossessionSummary;
   events: EventPoint[];
   freeze_frame: FreezeFramePlayer[];
-  /** Every shot in the possession, in order. The last is the one the clip ends on. */
-  shots: ShotXG[];
+  /**
+   * Every shot in the possession, in order. The last is the one the clip ends on.
+   *
+   * Optional on purpose, even though the API always sends it. The frontend
+   * deploys to Vercel in seconds and the API to Render's free tier in minutes,
+   * so after every push there is a window where this page is talking to an
+   * older API that does not have this field yet. Typing it as required let
+   * `detail.shots.length` compile, and reading `.length` of undefined does not
+   * fail quietly — it takes down the whole React tree with "Application error:
+   * a client-side exception has occurred". Optional makes the compiler insist
+   * on the guard at every use.
+   */
+  shots?: ShotXG[];
 };
 
 export type Filters = {
