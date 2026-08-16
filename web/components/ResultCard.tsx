@@ -56,7 +56,13 @@ export default function ResultCard({ row, selected, onSelect, onSimilar }: Props
         <span className="muted"> v {row.opponent}</span>
         {row.ended_in_goal && <span className="badge goal">GOAL</span>}
         {!row.ended_in_goal && row.ended_in_shot && <span className="badge shot">shot</span>}
-        {row.xg_sum > 0 && <span className="badge xg">xG {row.xg_sum.toFixed(2)}</span>}
+        {/* This project's model, not StatsBomb's — the summary row carries both
+            and showing someone else's number on our results made no sense. */}
+        {row.my_xg_sum != null && row.my_xg_sum > 0 && (
+          <span className="badge xg" title="expected goals, this project's model">
+            xG {row.my_xg_sum.toFixed(2)}
+          </span>
+        )}
       </div>
 
       <div className="card-meta muted small">

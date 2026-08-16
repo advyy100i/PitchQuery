@@ -32,7 +32,7 @@ from core import db  # noqa: E402
 from core.notes import scouting_note  # noqa: E402
 from core.planner import Vocabulary, plan as plan_query  # noqa: E402
 from core.retrieval import Filters, Retriever, hydrate  # noqa: E402
-from core.xg import XGModel  # noqa: E402
+from core.xg import UNSUPPORTED_SHOT_TYPES, XGModel  # noqa: E402
 
 STATE: dict = {}
 
@@ -161,7 +161,7 @@ def summary(row: dict) -> PossessionSummary:
         zone_path=row["zone_path"], token_string=row["token_string"],
         n_events=row["n_events"], duration_s=row["duration_s"] or 0.0,
         ended_in_shot=bool(row["ended_in_shot"]), ended_in_goal=bool(row["ended_in_goal"]),
-        xg_sum=float(row["xg_sum"] or 0.0))
+        xg_sum=float(row["xg_sum"] or 0.0), my_xg_sum=row.get("my_xg_sum"))
 
 
 def note_for(rows: list, f: Filters, extra_given=()) -> list:
@@ -236,6 +236,57 @@ def held_out(s: dict) -> Optional[bool]:
     if model is None or s.get("competition_id") is None:
         return None
     return f"{s['competition_id']}:{s['season_id']}" in model.test_comps
+
+
+def attach_my_xg(conn, rows: list) -> list:
+    """Add `my_xg_sum` to each hydrated possession row, in place.
+
+    The result cards used to show `xg_sum`, which is StatsBomb's number summed
+    over the possession's shots. Displaying someone else's model beside this
+    project's retrieval was confusing, so the badge shows ours instead — and
+    that has to be computed, since only StatsBomb's is a stored column.
+
+    One query and one batched predict for the whole result page. Scoring shots
+    one at a time inside the loop that builds twenty cards would mean twenty
+    round trips for a number nobody clicked on.
+
+    A possession whose every shot is one the model declines (a penalty) gets
+    None rather than 0.0. Zero would read as "the model thinks this was nothing",
+    which is the opposite of "the model was never trained to answer".
+    """
+    model = STATE.get("xg")
+    if model is None or not rows:
+        return rows
+
+    pairs = [(r["match_id"], int(r["possession_uid"].split(":")[1])) for r in rows]
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT e.match_id, e.possession, {SHOT_COLS} {SHOT_FROM} "
+            # unnest of two parallel arrays, rather than match_id = ANY(...) AND
+            # possession = ANY(...) — that form matches the cross product, so a
+            # page of 20 results would pull shots from up to 400 possessions.
+            "WHERE (e.match_id, e.possession) IN "
+            "      (SELECT * FROM unnest(%s::bigint[], %s::int[]))",
+            ([m for m, _ in pairs], [p for _, p in pairs]))
+        cols = [d.name for d in cur.description]
+        shots = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+    if shots:
+        for s, p in zip(shots, model.predict(shots)):
+            # predict() scores everything handed to it; predict_one() is what
+            # knows about penalties, so the exclusion is re-applied here.
+            s["_p"] = None if s["shot_type"] in UNSUPPORTED_SHOT_TYPES else float(p)
+
+    totals: dict = {}
+    for s in shots:
+        if s["_p"] is None:
+            continue
+        uid = f"{s['match_id']}:{s['possession']}"
+        totals[uid] = totals.get(uid, 0.0) + s["_p"]
+
+    for r in rows:
+        r["my_xg_sum"] = totals.get(r["possession_uid"])
+    return rows
 
 
 def shot_xg(s: dict) -> ShotXG:
@@ -353,7 +404,7 @@ def search(
                                     # PITCHQUERY_DENSE=0 a caller cannot force a
                                     # MiniLM load onto a box that can't afford it.
                                     use_dense=use_dense and _dense_on())
-    rows = hydrate(conn, out["results"])
+    rows = attach_my_xg(conn, hydrate(conn, out["results"]))
     return SearchResponse(
         results=[summary(r) for r in rows],
         n_candidates=out["n_candidates"],
@@ -393,7 +444,7 @@ def shape(
     conn = dbc()
     t0 = time.perf_counter()
     out = STATE["retriever"].by_shape(conn, drawn, filters=f, limit=limit)
-    rows = hydrate(conn, out["results"])
+    rows = attach_my_xg(conn, hydrate(conn, out["results"]))
     return SearchResponse(
         results=[summary(r) for r in rows],
         n_candidates=out["n_matched"],
@@ -415,7 +466,7 @@ def similar(uid: str, limit: int = Query(20, ge=1, le=100), use_dense: bool = Tr
                                          use_dense=use_dense and _dense_on())
     except KeyError:
         raise HTTPException(404, f"{uid} is not in the index")
-    rows = hydrate(conn, out["results"])
+    rows = attach_my_xg(conn, hydrate(conn, out["results"]))
     return SearchResponse(
         results=[summary(r) for r in rows],
         n_candidates=len(STATE["retriever"].uids),
@@ -429,7 +480,7 @@ def similar(uid: str, limit: int = Query(20, ge=1, le=100), use_dense: bool = Tr
 def possession(uid: str):
     """Everything the animator needs: ordered events with coordinates."""
     conn = dbc()
-    rows = hydrate(conn, [uid])
+    rows = attach_my_xg(conn, hydrate(conn, [uid]))
     if not rows:
         raise HTTPException(404, f"no possession {uid}")
     row = rows[0]

@@ -20,7 +20,12 @@ class PossessionSummary(BaseModel):
     duration_s: float
     ended_in_shot: bool
     ended_in_goal: bool
-    xg_sum: float
+    xg_sum: float = Field(description="StatsBomb's xG, summed over the shots in this possession")
+    my_xg_sum: Optional[float] = Field(
+        default=None,
+        description="this project's model, summed the same way. Null when the model "
+                    "is not loaded, or when every shot in the possession is one it "
+                    "declines to score (penalties)")
 
 
 class PlanTerm(BaseModel):

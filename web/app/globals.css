@@ -694,13 +694,6 @@ input:focus {
   letter-spacing: -0.01em;
 }
 
-.badge.holdout { background: var(--accent-wash); color: var(--accent-ink);
-                 text-transform: none; letter-spacing: 0; font-weight: 500;
-                 box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 22%, transparent); }
-.badge.muted-badge { background: transparent; color: var(--faint);
-                     border: 1px solid var(--line); text-transform: none;
-                     letter-spacing: 0; font-weight: 500; }
-
 .xg-single { display: flex; align-items: center; gap: 14px; }
 
 .xg-big {
@@ -725,6 +718,10 @@ input:focus {
            background: var(--accent); transition: width 0.35s var(--ease); }
 
 .xg-declined { margin: 0; font-style: italic; }
+
+/* The gap from StatsBomb, in prose. Deliberately quiet — it is context for the
+   number above it, not a verdict on it. */
+.xg-diff { margin: 9px 0 0; color: var(--ink-soft); }
 
 .xg-context { margin: 12px 0 6px; line-height: 1.6; }
 .xg-panel > p:last-child { margin: 0; padding-top: 9px;

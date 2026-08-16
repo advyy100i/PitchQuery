@@ -47,6 +47,22 @@ def _plural(n: int, one: str, many: Optional[str] = None) -> str:
     return one if n == 1 else (many or one + "s")
 
 
+def _xg(row: dict) -> float:
+    """This project's xG for a possession, falling back to StatsBomb's.
+
+    The result cards show our model, so the note beside them has to quote the
+    same one. A sentence reading "they average 0.14 xG" next to badges reading
+    0.09 is the kind of quiet disagreement nobody reports and everybody
+    distrusts.
+
+    The fallback is not decoration: `my_xg_sum` is null wherever the model is
+    not loaded, and null for a possession whose only shot is a penalty. Reading
+    those as zero would understate a set of chances rather than describe it.
+    """
+    mine = row.get("my_xg_sum")
+    return float(mine if mine is not None else (row.get("xg_sum") or 0.0))
+
+
 def scouting_note(rows: list, query: str = "", given=frozenset()) -> list:
     """Build a short note about a result set. Returns ordered claims.
 
@@ -97,7 +113,7 @@ def scouting_note(rows: list, query: str = "", given=frozenset()) -> list:
     # shot was the bug tests/test_notes.py caught: the claim and its evidence
     # described different sets. Splitting them keeps each citation exact.
     if shots:
-        xg = sum(r["xg_sum"] for r in shots) / len(shots)
+        xg = sum(_xg(r) for r in shots) / len(shots)
         if "ended_in_shot" in given:
             # The shot was asked for; only the chance quality is news.
             claims.append(Claim(
@@ -109,7 +125,7 @@ def scouting_note(rows: list, query: str = "", given=frozenset()) -> list:
 
     if goals and "ended_in_goal" not in given:
         verb = "is" if len(goals) == 1 else "are"
-        goal_xg = sum(r["xg_sum"] for r in goals) / len(goals)
+        goal_xg = sum(_xg(r) for r in goals) / len(goals)
         claims.append(Claim(
             f"{len(goals)} of the {n} {verb} scored, from {goal_xg:.2f} xG.",
             _uids(goals)))
@@ -138,11 +154,11 @@ def scouting_note(rows: list, query: str = "", given=frozenset()) -> list:
     # -- the standout ----------------------------------------------------------
     # A single-possession claim is allowed because it names its evidence
     # outright rather than generalising from one case.
-    best = max(rows, key=lambda r: r["xg_sum"] or 0.0)
-    if (best["xg_sum"] or 0) > 0.15:
+    best = max(rows, key=_xg)
+    if _xg(best) > 0.15:
         claims.append(Claim(
             f"The clearest chance is {best['team']} against "
-            f"{best['opponent']} at {best['xg_sum']:.2f} xG.",
+            f"{best['opponent']} at {_xg(best):.2f} xG.",
             [best["possession_uid"]]))
 
     return claims[:5]

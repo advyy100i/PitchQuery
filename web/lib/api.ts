@@ -16,7 +16,10 @@ export type PossessionSummary = {
   duration_s: number;
   ended_in_shot: boolean;
   ended_in_goal: boolean;
+  /** StatsBomb's xG, summed over the possession's shots. Not displayed. */
   xg_sum: number;
+  /** This project's model, summed the same way. Null when it declines them all. */
+  my_xg_sum: number | null;
 };
 
 export type PlanTerm = { phrase: string; effect: string };
