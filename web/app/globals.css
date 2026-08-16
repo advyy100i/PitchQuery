@@ -723,6 +723,21 @@ input:focus {
    number above it, not a verdict on it. */
 .xg-diff { margin: 9px 0 0; color: var(--ink-soft); }
 
+/* Which shot the headline number belongs to. Only meaningful when a move
+   contains more than one, but stated always so it is never ambiguous. */
+.xg-which { text-transform: uppercase; letter-spacing: 0.06em; font-size: 10px; }
+
+.xg-earlier { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line-soft); }
+.xg-earlier h4 { margin: 0 0 6px; font-size: 10px; font-weight: 600;
+                 text-transform: uppercase; letter-spacing: 0.06em; }
+.xg-earlier ul { list-style: none; margin: 0; padding: 0; }
+.xg-earlier li { display: grid; grid-template-columns: 34px 1fr auto; gap: 8px;
+                 font-size: 12px; color: var(--ink-soft); padding: 2px 0; }
+.xg-when { font-variant-numeric: tabular-nums; }
+.xg-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xg-each { font-family: var(--font-code); font-variant-numeric: tabular-nums; }
+.xg-total { margin: 8px 0 0; color: var(--muted); }
+
 .xg-context { margin: 12px 0 6px; line-height: 1.6; }
 .xg-panel > p:last-child { margin: 0; padding-top: 9px;
                            border-top: 1px solid var(--line-soft); line-height: 1.55; }

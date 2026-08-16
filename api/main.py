@@ -498,7 +498,7 @@ def possession(uid: str):
         cols = [d.name for d in cur.description]
         evs = [dict(zip(cols, r)) for r in cur.fetchall()]
 
-    points, freeze, last_shot_id = [], [], None
+    points, freeze, shot_ids = [], [], []
     for e in evs:
         attacking = e["team"] == e["possession_team"]
         # StatsBomb records EVERY event as if the acting team attacks left->right.
@@ -520,21 +520,20 @@ def possession(uid: str):
             duration=e["duration"], under_pressure=bool(e["under_pressure"]),
             token=e["token"] if attacking else None))
         if e["type"] == "Shot":
-            # The last shot, matching the freeze frame that gets drawn. A
-            # possession can contain several — a save and a rebound — and the
-            # animation ends on the final one.
-            last_shot_id = str(e["event_id"])
+            # Every shot, in order. A possession can contain a save and a
+            # rebound, and then the possession total is nobody's chance — the
+            # final attempt deserves its own number rather than being buried in
+            # a sum. The freeze frame keeps overwriting, so it ends up the one
+            # belonging to the last shot, which is where the animation stops.
+            shot_ids.append(str(e["event_id"]))
             if e["freeze_frame"]:
                 freeze = parse_freeze_frame(e["freeze_frame"])
 
-    shot = None
-    if last_shot_id:
-        got = shot_rows(conn, [last_shot_id]).get(last_shot_id)
-        if got:
-            shot = shot_xg(got)
+    fetched = shot_rows(conn, shot_ids)
+    shots = [shot_xg(fetched[i]) for i in shot_ids if i in fetched]
 
     return PossessionDetail(summary=summary(row), events=points,
-                            freeze_frame=freeze, shot=shot)
+                            freeze_frame=freeze, shots=shots)
 
 
 @app.get("/shot/{event_id}", response_model=ShotComparison)

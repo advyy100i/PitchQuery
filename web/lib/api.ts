@@ -92,7 +92,8 @@ export type PossessionDetail = {
   summary: PossessionSummary;
   events: EventPoint[];
   freeze_frame: FreezeFramePlayer[];
-  shot: ShotXG | null;
+  /** Every shot in the possession, in order. The last is the one the clip ends on. */
+  shots: ShotXG[];
 };
 
 export type Filters = {

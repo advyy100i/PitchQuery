@@ -138,9 +138,12 @@ class PossessionDetail(BaseModel):
     freeze_frame: list[FreezeFramePlayer] = Field(
         default_factory=list,
         description="player positions at the shot, when the possession ends in one")
-    shot: Optional[ShotXG] = Field(
-        default=None,
-        description="the shot this possession ends in, scored by both models")
+    shots: list[ShotXG] = Field(
+        default_factory=list,
+        description="every shot in the possession, in the order they were taken. "
+                    "The last is the one the clip ends on — roughly one shot-ending "
+                    "possession in ten contains a rebound or a second attempt, and "
+                    "the possession total is not that shot's chance")
 
 
 class ShotComparison(ShotXG):

@@ -118,11 +118,15 @@ written: a sentence counting goals was citing every shot.
 ### The xG model is deployed as arithmetic, not as a pickle.
 
 Every result carries this model's xG rather than StatsBomb's — including the
-scouting note, so the prose and the badges beside it quote the same model — and
-the clip panel states how far the model sits from StatsBomb on that shot. As a
-gap in prose, not a second bar: two bars invite a verdict from one shot, and one
-shot settles nothing. A 0.15 chance that goes in is not evidence against 0.15.
-The verdict is in the [benchmark](docs/benchmark.md), over thousands.
+scouting note, so the prose and the badges beside it quote the same model. The
+clip panel scores the final shot specifically, then lists the earlier attempts
+and the total: one shot-ending possession in ten contains a rebound, and there
+the possession total is nobody's chance in particular.
+
+StatsBomb's figure appears only as a stated gap, never a second bar. Two bars
+invite a verdict from one shot, and one shot settles nothing — a 0.15 chance
+that goes in is not evidence against 0.15. The verdict is in the
+[benchmark](docs/benchmark.md), over thousands.
 
 Training produces a `CalibratedClassifierCV` around three LightGBM boosters.
 Shipping that pickle would mean pinning scikit-learn and pandas on the server to

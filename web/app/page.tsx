@@ -179,7 +179,7 @@ export default function Page() {
               <Pitch events={detail.events} freezeFrame={detail.freeze_frame}
                      endedInGoal={detail.summary.ended_in_goal} />
               <code className="tokens block">{detail.summary.token_string}</code>
-              {detail.shot && <ShotPanel shot={detail.shot} />}
+              {detail.shots.length > 0 && <ShotPanel shots={detail.shots} />}
             </>
           ) : (
             <p className="muted">Select a result to watch it.</p>
