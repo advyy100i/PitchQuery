@@ -29,6 +29,7 @@ out/
 # Personal working notes, not part of the project.
 # Delete these two lines if you want the original build plan in the repo.
 plan.MD
+next_plan.md
 cost_restriction.txt
 
 # dbt build artefacts. `dbt build` regenerates all of them; the lock file and
