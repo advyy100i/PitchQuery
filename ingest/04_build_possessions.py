@@ -11,6 +11,12 @@ Two rules from the plan that this enforces:
   2. Possessions with fewer than 3 tokens are dropped — throw-in noise that
      would otherwise flood every result set.
 
+Every batch is checked against PossessionSchema before it is written. That
+contract is the one that matters most in the whole pipeline: `token_string` is
+matched against a regex generated from `core.zones`, so a possession the
+searcher could not tokenise cannot reach the index. It would not raise anywhere
+downstream — it would simply never match a query.
+
 Run:
   python ingest/04_build_possessions.py --limit 5 --show 3   # eyeball first
   python ingest/04_build_possessions.py
@@ -25,6 +31,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core import db  # noqa: E402
 from core.config import RAW_DIR  # noqa: E402
 from core.zones import MIN_EVENTS, token, tsv_string  # noqa: E402
+from pipeline.contracts import PossessionSchema, check, frame  # noqa: E402
+
+# Positional, matching INSERT_SQL. token_tsv is a derived rewrite of
+# token_string and is validated through it, so the contract does not repeat it.
+POSSESSION_COLS = ["possession_uid", "match_id", "possession", "team", "opponent",
+                   "competition", "season", "play_pattern", "start_idx", "end_idx",
+                   "n_events", "duration_s", "start_zone", "end_zone", "zone_path",
+                   "token_string", "token_tsv", "ended_in_shot", "xg_sum",
+                   "ended_in_goal"]
 
 INSERT_SQL = """
 INSERT INTO possessions (possession_uid, match_id, possession, team, opponent,
@@ -103,24 +118,33 @@ def build_match(match_id: int, events: list, meta: tuple) -> list:
     return rows
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=None, help="process at most N matches")
-    ap.add_argument("--show", type=int, default=0,
-                    help="print this many goal-ending possessions for the eyeball test")
-    ap.add_argument("--dry-run", action="store_true", help="build but do not write")
-    args = ap.parse_args()
+def main(match_ids: list = None, *, limit: int = None, show: int = 0,
+         dry_run: bool = False, validate: bool = True) -> dict:
+    """Rebuild possessions from the cached event JSON.
 
+    `match_ids` is what ingest/03_load_events.py returns, so a flow run only
+    rebuilds the matches it just loaded. Left as None every match in the
+    `matches` table is rebuilt, which is what a bare CLI run does and what any
+    change to core/zones.py requires.
+
+    Returns {"rows": possessions written, "matches"}.
+    """
     conn = db.connect()
     meta = match_meta(conn)
     if not meta:
         print("no matches in the database — run ingest/03_load_events.py first")
-        return
+        conn.close()
+        return {"rows": 0, "matches": 0}
 
+    wanted = set(meta) if match_ids is None else (set(match_ids) & set(meta))
     paths = [p for p in sorted((RAW_DIR / "events").glob("*.json"), key=lambda p: int(p.stem))
-             if int(p.stem) in meta]
-    if args.limit:
-        paths = paths[: args.limit]
+             if int(p.stem) in wanted]
+    if limit:
+        paths = paths[: limit]
+    if not paths:
+        print("nothing to rebuild — no cached event files for the requested matches")
+        conn.close()
+        return {"rows": 0, "matches": 0}
 
     t0 = time.time()
     total = shown = 0
@@ -131,33 +155,56 @@ def main():
             rows = build_match(mid, events, meta[mid])
             total += len(rows)
 
-            if shown < args.show:
+            if shown < show:
                 for r in rows:
-                    if r[19] and shown < args.show:      # ended_in_goal
-                        print(f"\n{r[0]}  {r[3]} vs {r[4]}  ({r[7]}, {r[11]:.0f}s, xg {r[18]:.2f})")
+                    if r[19] and shown < show:      # ended_in_goal
+                        print()
+                        print(f"{r[0]}  {r[3]} vs {r[4]}  ({r[7]}, {r[11]:.0f}s, xg {r[18]:.2f})")
                         print(f"  {r[15]}")
                         shown += 1
 
-            if not args.dry_run:
+            if validate and rows:
+                check(PossessionSchema, frame(rows, POSSESSION_COLS),
+                      where=f"match {mid}")
+
+            if not dry_run:
                 cur.executemany(INSERT_SQL, rows)
                 conn.commit()
             if i % 50 == 0 or i == len(paths):
                 print(f"  {i}/{len(paths)} matches  {total:,} possessions  "
                       f"({i / max(time.time() - t0, 1e-9):.1f} match/s)")
 
-    if args.dry_run:
-        print(f"\ndry run — built {total:,} possessions from {len(paths)} matches, wrote nothing")
-        return
+    if dry_run:
+        print()
+        print(f"dry run — built {total:,} possessions from {len(paths)} matches, wrote nothing")
+        conn.close()
+        return {"rows": total, "matches": len(paths), "dry_run": True}
 
     with conn.cursor() as cur:
         cur.execute("SELECT count(*), avg(n_events), avg(duration_s), "
                     "avg(ended_in_shot::int), avg(ended_in_goal::int) FROM possessions")
         n, avg_ev, avg_dur, p_shot, p_goal = cur.fetchone()
-    print(f"\nbuilt {total:,} possessions in {time.time() - t0:.0f}s")
+    print()
+    print(f"built {total:,} possessions in {time.time() - t0:.0f}s")
     print(f"db now holds {n:,} possessions — mean {avg_ev:.1f} tokens, {avg_dur:.1f}s, "
           f"{p_shot * 100:.1f}% end in a shot, {p_goal * 100:.2f}% in a goal")
     conn.close()
+    return {"rows": total, "matches": len(paths), "corpus": int(n)}
+
+
+@db.cli
+def cli():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--limit", type=int, default=None, help="process at most N matches")
+    ap.add_argument("--show", type=int, default=0,
+                    help="print this many goal-ending possessions for the eyeball test")
+    ap.add_argument("--dry-run", action="store_true", help="build but do not write")
+    ap.add_argument("--no-validate", action="store_true",
+                    help="skip the Pandera contract")
+    args = ap.parse_args()
+    main(limit=args.limit, show=args.show, dry_run=args.dry_run,
+         validate=not args.no_validate)
 
 
 if __name__ == "__main__":
-    main()
+    cli()
