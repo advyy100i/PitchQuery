@@ -1,0 +1,58 @@
+{
+  "split": "gender",
+  "date": "2026-08-28",
+  "reference": "men's football",
+  "current": "women's football",
+  "n_reference": 7517,
+  "n_current": 3341,
+  "shifts": [
+    {
+      "feature": "dist_nearest_def",
+      "reference_mean": 2.9324939868152193,
+      "current_mean": 2.4657810511643223,
+      "cohens_d": -0.21260010805890164,
+      "n_reference": 7517,
+      "n_current": 3341
+    },
+    {
+      "feature": "n_def_in_cone",
+      "reference_mean": 0.7785020619928162,
+      "current_mean": 0.9877282250823107,
+      "cohens_d": 0.20060872238891547,
+      "n_reference": 7517,
+      "n_current": 3341
+    },
+    {
+      "feature": "gk_off_line",
+      "reference_mean": 2.459579563597658,
+      "current_mean": 2.117634730538922,
+      "cohens_d": -0.16246229907774729,
+      "n_reference": 7516,
+      "n_current": 3340
+    },
+    {
+      "feature": "angle_rad",
+      "reference_mean": 0.45075900056014384,
+      "current_mean": 0.4873470828081712,
+      "cohens_d": 0.13069233169914735,
+      "n_reference": 7517,
+      "n_current": 3341
+    },
+    {
+      "feature": "gk_dist_to_goal",
+      "reference_mean": 3.3344061152727513,
+      "current_mean": 3.0230714811137727,
+      "cohens_d": -0.12939955409970774,
+      "n_reference": 7516,
+      "n_current": 3340
+    },
+    {
+      "feature": "distance_m",
+      "reference_mean": 18.4410892225888,
+      "current_mean": 17.580373261448667,
+      "cohens_d": -0.10457622392761737,
+      "n_reference": 7517,
+      "n_current": 3341
+    }
+  ]
+}
