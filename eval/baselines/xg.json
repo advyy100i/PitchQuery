@@ -1,0 +1,23 @@
+{
+  "auc": 0.792985,
+  "brier": 0.072657,
+  "corpus": {
+    "hash": "ccc43593",
+    "rows": 40000
+  },
+  "ece": 0.014534,
+  "logloss": 0.258056,
+  "logloss_gap_to_statsbomb": 0.007343,
+  "measured_at": "2026-08-28T14:59:32+00:00",
+  "n_shots": 3038,
+  "observed_over_expected": 0.968633,
+  "scope": "held-out",
+  "statsbomb_logloss": 0.250712,
+  "test_comps": [
+    "43:106",
+    "72:107"
+  ],
+  "unsupported_shot_types": [
+    "Penalty"
+  ]
+}

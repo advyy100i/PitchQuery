@@ -1,0 +1,17 @@
+{
+  "corpus": {
+    "hash": "ccc43593",
+    "rows": 40000
+  },
+  "corpus_size": 40000,
+  "measured_at": "2026-08-28T14:59:29+00:00",
+  "mrr": 0.714159,
+  "n_discriminating": 25,
+  "n_queries": 30,
+  "p50_latency_ms": 9.704,
+  "p95_latency_ms": 19.376,
+  "p_at_10": 0.548,
+  "p_at_5": 0.568,
+  "ranker": "sparse",
+  "sparse_p_at_5": 0.568
+}
