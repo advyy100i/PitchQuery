@@ -1,0 +1,14 @@
+apiVersion: 1
+
+providers:
+  - name: pitchquery
+    orgId: 1
+    type: file
+    disableDeletion: false
+    # The dashboard lives in the repo. Editing it in the browser is fine for
+    # exploring; anything worth keeping gets exported back to the JSON file,
+    # or it is gone the next time the volume is pruned.
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

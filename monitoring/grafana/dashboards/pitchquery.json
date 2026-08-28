@@ -1,0 +1,167 @@
+{
+  "uid": "pitchquery-serving",
+  "title": "PitchQuery — serving",
+  "tags": ["pitchquery"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Search latency (p50 / p95 / p99)",
+      "description": "From the instrumentator's default histogram. /search only — /health and /metrics are excluded at the source, and averaging them in would flatter the numbers with two endpoints that do no work.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "pitchquery-prom" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 5 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "p50",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(http_request_duration_seconds_bucket{handler=\"/search\"}[5m])))"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "p95",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{handler=\"/search\"}[5m])))"
+        },
+        {
+          "refId": "C",
+          "legendFormat": "p99",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{handler=\"/search\"}[5m])))"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Reranker time (p95)",
+      "description": "The learned ranker's own histogram, kept separate from total latency on purpose: folded together, a reranker that got three times slower would look like search getting slightly slower.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "pitchquery-prom" },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "lineWidth": 2, "fillOpacity": 5 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "rerank p95",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(pitchquery_rerank_seconds_bucket[5m])))"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Searches by ranker",
+      "description": "Which ranker actually answered. A deployment that lost its ranker artefact, or fell back to sparse because torch is absent, shows up here as a line moving rather than as silence.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "pitchquery-prom" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 10, "stacking": { "mode": "normal" } } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{ranker}}",
+          "expr": "sum by (ranker) (rate(pitchquery_ranker_used_total[5m]))"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Parse failures and empty result sets",
+      "description": "A parse failure is a search containing at least one word core/planner.py could not place; pipeline/telemetry.py turns the same signal into a ranked vocabulary list. A zero-result query is worse — the parser understood it and there was nothing there.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "pitchquery-prom" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 5 } },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "parse failures",
+          "expr": "rate(pitchquery_parse_failures_total[5m])"
+        },
+        {
+          "refId": "B",
+          "legendFormat": "zero results",
+          "expr": "rate(pitchquery_zero_result_queries_total[5m])"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Searches that returned nothing",
+      "description": "As a share of all searches over the window. The single number worth alerting on: it goes up when the corpus, the parser or the filters stop agreeing with each other.",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "pitchquery-prom" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.05 },
+              { "color": "red", "value": 0.15 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(pitchquery_zero_result_queries_total[1h]) / clamp_min(sum(increase(pitchquery_ranker_used_total[1h])), 1)"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Searches with an unrecognised word",
+      "description": "Not an error rate. The planner is deliberately partial — it fills what it recognises and reports the rest — so this is the size of the parser's blind spot, and the list of words is in pipeline/telemetry.py.",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "pitchquery-prom" },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit", "min": 0, "max": 1 },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(pitchquery_parse_failures_total[1h]) / clamp_min(sum(increase(pitchquery_ranker_used_total[1h])), 1)"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Requests by status",
+      "description": "Status codes are not grouped into 2xx/4xx/5xx at the source, so a 404 for a possession that does not exist stays distinguishable from a 500.",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "pitchquery-prom" },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{status}}",
+          "expr": "sum by (status) (rate(http_requests_total[5m]))"
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import LivePanel from "../components/LivePanel";
 import Pitch from "../components/Pitch";
 import QueryBar from "../components/QueryBar";
 import ResultCard from "../components/ResultCard";
@@ -9,7 +10,7 @@ import ShapePicker from "../components/ShapePicker";
 import ShotPanel from "../components/ShotPanel";
 import {
   type Filters, type Meta, type PossessionDetail, type SearchResponse,
-  ask, byShape, meta as fetchMeta, possession, search, similar,
+  ask, byShape, meta as fetchMeta, possession, reportClick, search, similar,
 } from "../lib/api";
 
 export default function Page() {
@@ -19,14 +20,28 @@ export default function Page() {
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<"words" | "shape">("words");
   const [error, setError] = useState<string | null>(null);
+  // A ref, not state: a click reads the id of the search that produced the list
+  // it is looking at, and nothing renders from it.
+  const searchId = useRef<number | null>(null);
 
   useEffect(() => {
     fetchMeta().then(setMeta).catch(() => setError(
       "Cannot reach the API. Start it with:  uvicorn api.main:app --port 8000"));
   }, []);
 
-  const select = useCallback(async (uid: string) => {
+  /**
+   * Open a clip.
+   *
+   * `rank` is the 1-based position the result was shown at, and it is only
+   * passed when a person clicked. The automatic selection of the first result
+   * after every search deliberately does NOT report a click: logging it would
+   * put one guaranteed rank-1 click on every single search and drown the
+   * signal Phase 7 actually needs, which is where in the list people go when
+   * the ranking was wrong.
+   */
+  const select = useCallback(async (uid: string, rank?: number) => {
     setDetail(null);
+    if (rank !== undefined) reportClick(searchId.current, uid, rank);
     try {
       setDetail(await possession(uid));
     } catch (e) {
@@ -40,6 +55,7 @@ export default function Page() {
     try {
       const r = await search(hint, filters, 20);
       setRes(r);
+      searchId.current = r.search_id ?? null;
       if (r.results.length) select(r.results[0].possession_uid);
       else setDetail(null);
     } catch (e) {
@@ -55,6 +71,7 @@ export default function Page() {
     try {
       const r = await ask(question, {}, 20);
       setRes(r);
+      searchId.current = r.search_id ?? null;
       if (r.results.length) select(r.results[0].possession_uid);
       else setDetail(null);
     } catch (e) {
@@ -70,6 +87,7 @@ export default function Page() {
     try {
       const r = await byShape(zones, {}, 20);
       setRes(r);
+      searchId.current = r.search_id ?? null;
       if (r.results.length) select(r.results[0].possession_uid);
       else setDetail(null);
     } catch (e) {
@@ -84,6 +102,7 @@ export default function Page() {
     try {
       const r = await similar(uid, 20);
       setRes(r);
+      searchId.current = r.search_id ?? null;
       if (r.results.length) select(r.results[0].possession_uid);
     } catch (e) {
       setError(String(e));
@@ -148,12 +167,12 @@ export default function Page() {
             {res && <span className="muted small">({res.results.length})</span>}
           </h2>
           <div className="result-list">
-            {res?.results.map((row) => (
+            {res?.results.map((row, i) => (
               <ResultCard
                 key={row.possession_uid}
                 row={row}
                 selected={detail?.summary.possession_uid === row.possession_uid}
-                onSelect={() => select(row.possession_uid)}
+                onSelect={() => select(row.possession_uid, i + 1)}
                 onSimilar={() => more(row.possession_uid)}
               />
             ))}
@@ -188,6 +207,8 @@ export default function Page() {
           )}
         </section>
       </div>
+
+      <LivePanel />
 
       <footer className="muted small">
         Data source: <a href="https://github.com/statsbomb/open-data">StatsBomb Open Data</a>.
