@@ -1,0 +1,11 @@
+# Provisioned from a file so the dashboard works on a fresh container without
+# anybody clicking through the setup wizard.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: pitchquery-prom
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

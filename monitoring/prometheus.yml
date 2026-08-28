@@ -1,0 +1,22 @@
+# Local only. `docker compose --profile obs up -d`.
+
+global:
+  # Fast, because this scrapes a laptop during a demo and a 60-second interval
+  # would mean a graph that is empty for the first minute of every session.
+  scrape_interval: 10s
+  evaluation_interval: 10s
+
+scrape_configs:
+  - job_name: pitchquery-api
+    metrics_path: /metrics
+    static_configs:
+      # The API runs on the host under uvicorn, not in a container. Prometheus
+      # is in one, so it reaches back out through the gateway alias declared in
+      # docker-compose.yml.
+      - targets: ["host.docker.internal:8000"]
+        labels:
+          service: api
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

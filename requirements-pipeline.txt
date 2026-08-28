@@ -1,0 +1,37 @@
+# The platform layer: orchestration, warehouse, contracts, tracking, monitoring,
+# streaming and the dashboard. Install when you get to it — none of it is needed
+# to run the API or reproduce the retrieval and xG numbers.
+#
+# All of it runs locally and all of it is the open-source edition. The paid
+# products with the same names — Prefect Cloud, dbt Cloud, Evidently Cloud,
+# Grafana Cloud — are not used anywhere in this project and are not needed to
+# run any of it.
+
+# Phase 1-2: the ingest flow and incremental loads.
+prefect>=3.0
+
+# Phase 3: the warehouse. `cd warehouse && dbt deps` fetches dbt_utils, which is
+# only there for accepted_range and unique_combination_of_columns.
+dbt-core>=1.8
+dbt-postgres>=1.8
+
+# Phase 4: dataframe contracts between pipeline steps.
+pandera>=0.20
+
+# Phase 5: experiment tracking and the model registry. SQLite backend, local
+# artefact folder — `mlflow server` is optional, since the SQLite URI works
+# against the file directly.
+mlflow>=3.0
+
+# Phase 9: drift reports. Writes HTML into docs/drift/.
+evidently>=0.7
+
+# Phase 10: the three custom counters and /metrics. Prometheus and Grafana
+# themselves are containers under the `obs` compose profile.
+prometheus-fastapi-instrumentator>=7.0
+
+# Phase 11: the match replay. Talks to Redpanda under the `stream` profile.
+confluent-kafka>=2.5
+
+# Phase 12: the operational dashboard.
+streamlit>=1.38

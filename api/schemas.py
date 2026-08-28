@@ -67,6 +67,16 @@ class SearchResponse(BaseModel):
     filters: dict = Field(description="the structured filters applied — shown in the UI for trust")
     ranker_uids: dict = Field(default_factory=dict,
                               description="per-ranker uid lists, for the sparse/dense comparison")
+    ranker: str = Field(default="fused",
+                        description="which ranker ordered these: sparse, fused, learned or shape")
+    rerank_ms: Optional[float] = Field(
+        default=None,
+        description="time the learned reranker spent, separate from took_ms so a "
+                    "regression in it is visible rather than absorbed")
+    search_id: Optional[int] = Field(
+        default=None,
+        description="row id in search_log; POST it back to /click when a result is "
+                    "opened, so the ranking that produced it can be evaluated")
     plan: Optional[PlanResponse] = Field(
         default=None, description="set when the search came from an English query")
     note: list[NoteClaim] = Field(
@@ -154,3 +164,18 @@ class ShotComparison(ShotXG):
     y: float
     play_pattern: Optional[str] = None
     freeze_frame: list[FreezeFramePlayer] = Field(default_factory=list)
+
+
+class ClickAck(BaseModel):
+    """Response to POST /click.
+
+    An acknowledgement rather than a resource, because the client has nothing to
+    do with the answer. `recorded` is false when search logging is off or the
+    database refused the write — the endpoint still returns 200, since a failed
+    click log is not a failed user action and there is nothing for the frontend
+    to retry or report.
+    """
+    recorded: bool
+    search_id: int
+    possession_uid: str
+    rank: int

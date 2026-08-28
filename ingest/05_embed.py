@@ -92,30 +92,50 @@ def build_hnsw(conn):
     print(f"  hnsw index built in {time.time() - t0:.0f}s")
 
 
-def main():
+def main(*, sparse_only: bool = False, dense_only: bool = False) -> dict:
+    """Rebuild the indexes over the whole corpus.
+
+    Unlike the steps before it this one is never incremental: TF-IDF weights are
+    corpus-relative, so adding one competition changes the idf of every token
+    and every stored vector with it. Refitting 67k short documents costs a
+    couple of seconds, which is far cheaper than serving a matrix whose
+    vocabulary no longer matches the data behind it.
+
+    Returns {"rows": corpus size, "terms", "nnz"}.
+    """
+    conn = db.connect()
+    uids, docs = load_corpus(conn)
+    if not uids:
+        print("no possessions — run ingest/04_build_possessions.py first")
+        conn.close()
+        return {"rows": 0}
+    print(f"corpus: {len(uids):,} possessions, "
+          f"mean {np.mean([len(d.split()) for d in docs]):.1f} tokens")
+
+    out = {"rows": len(uids)}
+    if not dense_only:
+        print("sparse:")
+        matrix = build_sparse(uids, docs)
+        out["terms"] = int(matrix.shape[1])
+        out["nnz"] = int(matrix.nnz)
+    if not sparse_only:
+        print("dense:")
+        build_dense(conn, uids, docs)
+        build_hnsw(conn)
+        out["dense"] = True
+    conn.close()
+    return out
+
+
+@db.cli
+def cli():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sparse-only", action="store_true",
                     help="skip the MiniLM pass (no torch required)")
     ap.add_argument("--dense-only", action="store_true")
     args = ap.parse_args()
-
-    conn = db.connect()
-    uids, docs = load_corpus(conn)
-    if not uids:
-        print("no possessions — run ingest/04_build_possessions.py first")
-        return
-    print(f"corpus: {len(uids):,} possessions, "
-          f"mean {np.mean([len(d.split()) for d in docs]):.1f} tokens")
-
-    if not args.dense_only:
-        print("sparse:")
-        build_sparse(uids, docs)
-    if not args.sparse_only:
-        print("dense:")
-        build_dense(conn, uids, docs)
-        build_hnsw(conn)
-    conn.close()
+    main(sparse_only=args.sparse_only, dense_only=args.dense_only)
 
 
 if __name__ == "__main__":
-    main()
+    cli()

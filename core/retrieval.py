@@ -10,6 +10,7 @@ phrase matching. The dense ranker earns its place only in fusion — Phase 3 of
 the plan scores both separately so that claim is evidence rather than assertion.
 """
 import pickle
+import time
 from collections import defaultdict
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -20,6 +21,10 @@ import numpy as np
 from core.config import EMBED_MODEL, INDEX_DIR
 
 SPARSE_PATH = INDEX_DIR / "tfidf.pkl"
+
+# Distinguishes "not looked for yet" from "looked for and absent", so a
+# missing ranker artefact is not re-probed on every single query.
+_UNSET = object()
 
 # Columns a caller is allowed to filter on. Whitelisted rather than interpolated
 # so no caller — including the LLM planner in Phase 6 — can reach past them.
@@ -147,6 +152,8 @@ class Retriever:
         self._model = None
         self._dense_ok = None
         self._shapes = None
+        self._ranker = _UNSET
+        self.ranker_status = "not loaded"
 
     @staticmethod
     def _fit_from_db(conn):
@@ -196,7 +203,14 @@ class Retriever:
                         params)
             return {r[0] for r in cur.fetchall()}
 
-    def sparse_rank(self, query: str, allowed=None, limit: int = 50) -> list:
+    def sparse_scored(self, query: str, allowed=None, limit: int = 50) -> list:
+        """[(uid, cosine similarity)], best first.
+
+        The learned ranker in Phase 7 needs the score and not just the position:
+        a candidate that wins its rank by a hair and one that wins by a mile
+        occupy the same rank, and the difference is exactly what a fixed RRF
+        throws away.
+        """
         q = self.vectorizer.transform([query])
         if q.nnz == 0:                      # nothing in the query is in-vocabulary
             return []
@@ -213,11 +227,21 @@ class Retriever:
         n = min(limit, len(scores))
         top = np.argpartition(-scores, n - 1)[:n]
         top = top[np.argsort(-scores[top])]
-        return [self.uids[i] for i in top if scores[i] > 0]
+        return [(self.uids[i], float(scores[i])) for i in top if scores[i] > 0]
 
-    def dense_rank(self, conn, query: str = None, *, vector=None,
-                   filters: Filters = None, limit: int = 50,
-                   exclude: str = None) -> list:
+    def sparse_rank(self, query: str, allowed=None, limit: int = 50) -> list:
+        return [uid for uid, _ in self.sparse_scored(query, allowed, limit)]
+
+    def dense_scored(self, conn, query: str = None, *, vector=None,
+                     filters: Filters = None, limit: int = 50,
+                     exclude: str = None) -> list:
+        """[(uid, cosine similarity)], best first.
+
+        pgvector's `<=>` is cosine DISTANCE, so the similarity is 1 minus it.
+        Returning the similarity rather than the distance keeps both rankers'
+        scores pointing the same way, which is one fewer sign to get wrong in
+        core/rank_features.py.
+        """
         if vector is None:
             vector = self.model.encode([query], normalize_embeddings=True)[0]
         literal = "[" + ",".join(f"{v:.6f}" for v in vector) + "]"
@@ -228,11 +252,18 @@ class Retriever:
             extra = " AND possession_uid <> %s"
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT possession_uid FROM possessions "
+                f"SELECT possession_uid, 1 - (embedding <=> %s::vector) "
+                f"FROM possessions "
                 f"WHERE embedding IS NOT NULL AND {sql}{extra} "
                 f"ORDER BY embedding <=> %s::vector LIMIT %s",
-                params + ([exclude] if exclude else []) + [literal, limit])
-            return [r[0] for r in cur.fetchall()]
+                [literal] + params + ([exclude] if exclude else []) + [literal, limit])
+            return [(r[0], float(r[1])) for r in cur.fetchall()]
+
+    def dense_rank(self, conn, query: str = None, *, vector=None,
+                   filters: Filters = None, limit: int = 50,
+                   exclude: str = None) -> list:
+        return [uid for uid, _ in self.dense_scored(
+            conn, query, vector=vector, filters=filters, limit=limit, exclude=exclude)]
 
     # -- shape search ---------------------------------------------------------
 
@@ -296,26 +327,86 @@ class Retriever:
 
     # -- the two public entry points -----------------------------------------
 
+    @property
+    def ranker(self):
+        """The learned reranker, or None with the reason on `ranker_status`.
+
+        Non-fatal on purpose, like the xG model: reciprocal rank fusion is a
+        perfectly good default and an API that refused to start because a 38 KB
+        file was missing would trade a better ranking for an outage.
+        """
+        if self._ranker is _UNSET:
+            try:
+                from core.ranker import Ranker
+
+                self._ranker = Ranker.load()
+                self.ranker_status = self._ranker.summary
+            except FileNotFoundError:
+                self._ranker = None
+                self.ranker_status = ("models/ranker.json.gz not found — "
+                                      "run models/train_ranker.py --promote")
+            except Exception as exc:
+                self._ranker = None
+                self.ranker_status = f"{type(exc).__name__}: {exc}"
+        return self._ranker
+
     def search(self, conn, *, sequence_hint: str, filters: Filters = None,
-               limit: int = 20, pool: int = 50, use_dense: bool = True) -> dict:
+               limit: int = 20, pool: int = 50, use_dense: bool = True,
+               use_ranker: bool = False) -> dict:
         """`sequence_hint` is a token string — either written by hand or, in
-        Phase 6, invented by the planner as an 'ideal possession'."""
+        Phase 6, invented by the planner as an 'ideal possession'.
+
+        With `use_ranker`, the two rankers still decide which candidates are in
+        play and the learned model (Phase 7) decides their order. It reorders
+        the pool and never widens it: recall is fusion's job, precision at the
+        top is the ranker's.
+        """
         filters = filters or Filters()
         # Fall back to sparse-only rather than raising where torch is absent.
         use_dense = use_dense and self.dense_available
         allowed = self.candidates(conn, filters)
         if allowed is not None and not allowed:
-            return {"results": [], "sparse": [], "dense": [], "n_candidates": 0}
+            return {"results": [], "sparse": [], "dense": [], "n_candidates": 0,
+                    "ranker": "none", "rerank_ms": None}
 
-        sparse = self.sparse_rank(sequence_hint, allowed, limit=pool)
-        dense = (self.dense_rank(conn, sequence_hint, filters=filters, limit=pool)
+        model = self.ranker if use_ranker else None
+        # The learned ranker was trained on a pool of 100 and its rank features
+        # are 1-based positions within one; scoring it over a pool of 50 would
+        # feed it a distribution it never saw.
+        if model is not None:
+            pool = max(pool, model.pool)
+
+        sparse = self.sparse_scored(sequence_hint, allowed, limit=pool)
+        dense = (self.dense_scored(conn, sequence_hint, filters=filters, limit=pool)
                  if use_dense else [])
-        fused = rrf(sparse, dense) if dense else sparse
+        sparse_uids = [u for u, _ in sparse]
+        dense_uids = [u for u, _ in dense]
+        fused = rrf(sparse_uids, dense_uids) if dense_uids else sparse_uids
+
+        results, rerank_ms, which = fused[:limit], None, ("fused" if dense_uids
+                                                          else "sparse")
+        if model is not None and fused:
+            t0 = time.perf_counter()
+            rows = hydrate(conn, fused[:model.pool])
+            reordered = model.rerank(
+                rows, sequence_hint,
+                {u: (s, i + 1.0) for i, (u, s) in enumerate(sparse)},
+                {u: (s, i + 1.0) for i, (u, s) in enumerate(dense)})
+            rerank_ms = round((time.perf_counter() - t0) * 1000, 2)
+            results = [r["possession_uid"] for r in reordered][:limit]
+            which = "learned"
+
         return {
-            "results": fused[:limit],
-            "sparse": sparse[:limit],
-            "dense": dense[:limit],
+            "results": results,
+            "sparse": sparse_uids[:limit],
+            "dense": dense_uids[:limit],
+            "fused": fused[:limit],
             "n_candidates": len(allowed) if allowed is not None else len(self.uids),
+            "ranker": which,
+            # Logged as its own number rather than folded into the total, so a
+            # regression in the reranker is visible instead of being absorbed
+            # into "search got slower".
+            "rerank_ms": rerank_ms,
         }
 
     def similar(self, conn, uid: str, *, limit: int = 20, pool: int = 50,

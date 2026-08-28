@@ -762,3 +762,38 @@ footer a { color: var(--accent); text-decoration-thickness: 1px;
     transition-duration: 0.01ms !important;
   }
 }
+
+/* --- match replay (Phase 11) ---------------------------------------------- */
+/* Full width under the two columns: a possession's token string is long, and
+   squeezing it into the results column would wrap every line. */
+.live {
+  margin-top: 2rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule, #e5e2dc);
+}
+
+.live-current {
+  margin: 0.75rem 0 1rem;
+}
+
+.live-head {
+  margin-bottom: 0.35rem;
+}
+
+.live-closed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.live-closed li {
+  /* The finished possessions are context for the one in progress, so they are
+     set back rather than competing with it. */
+  opacity: 0.72;
+}
+
+.tokens.block.small {
+  font-size: 0.78rem;
+}

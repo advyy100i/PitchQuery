@@ -31,6 +31,17 @@ SB_BASE = "https://raw.githubusercontent.com/statsbomb/open-data/master/data"
 # Pitch, per StatsBomb spec. Phase 0 verifies this instead of trusting it.
 PITCH_X = 120.0
 PITCH_Y = 80.0
+
+# How far outside the pitch a coordinate is still allowed to be.
+#
+# Not slop: StatsBomb genuinely records the ball marginally over the line when a
+# shot is struck from on top of it, and this corpus contains two such rows
+# (x = 120.5 and x = 120.1, both shots from the byline). A validity check that
+# fails on correct data is worse than no check, because it teaches you to skip
+# the output. Two units is enough for that and far too little to hide the
+# failure these bounds exist to catch — a coordinate parsed on the wrong scale,
+# or a freeze frame left in the defending team's reference frame.
+PITCH_MARGIN = 2.0
 GOAL_CENTRE = (120.0, 40.0)
 GOAL_POSTS = ((120.0, 36.0), (120.0, 44.0))
 

@@ -27,23 +27,13 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score  # noqa: E402
+from sklearn.metrics import log_loss  # noqa: E402
 
 from core.config import DOCS_DIR, INDEX_DIR  # noqa: E402
+from models.metrics import metrics  # noqa: E402
 
 MODELS = [("distance+angle", "p_base"), ("mine (+context)", "p_mine"),
           ("StatsBomb (reference)", "p_sb")]
-
-
-def metrics(y, p) -> dict:
-    p = np.clip(p, 1e-6, 1 - 1e-6)
-    return {
-        "log_loss": log_loss(y, p, labels=[0, 1]),
-        "brier": brier_score_loss(y, p),
-        "auc": roc_auc_score(y, p),
-        "expected": float(p.sum()),
-        "observed": int(y.sum()),
-    }
 
 
 def calibration_plot(df: pd.DataFrame, path: Path, bins: int = 10) -> None:
@@ -140,8 +130,8 @@ def main():
         "",
         "Data source: StatsBomb.",
         "",
-        "| model | log-loss | Brier | ROC-AUC | expected goals | observed | O/E | gap closed |",
-        "|---|--:|--:|--:|--:|--:|--:|--:|",
+        "| model | log-loss | Brier | ECE | ROC-AUC | expected goals | observed | O/E | gap closed |",
+        "|---|--:|--:|--:|--:|--:|--:|--:|--:|",
     ]
     for label, col in MODELS:
         m = res[col]
@@ -152,7 +142,8 @@ def main():
         else:
             g = f"**{gap * 100:.0f}%**" if gap is not None else "n/a"
         lines.append(
-            f"| {label} | {m['log_loss']:.4f} | {m['brier']:.4f} | {m['auc']:.4f} | "
+            f"| {label} | {m['log_loss']:.4f} | {m['brier']:.4f} | {m['ece']:.4f} | "
+            f"{m['auc']:.4f} | "
             f"{m['expected']:.1f} | {m['observed']} | "
             f"{m['observed'] / m['expected']:.3f} | {g} |")
 

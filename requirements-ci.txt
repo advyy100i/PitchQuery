@@ -1,0 +1,31 @@
+# What .github/workflows/eval.yml installs. Nothing else.
+#
+# Deliberately absent, and each absence is the point:
+#
+#   torch / sentence-transformers — 2.5 GB. CI scores the sparse ranker only and
+#     says so in the report, rather than making every pull request wait several
+#     minutes to download a dense model that would then be measured on a fixture.
+#   matplotlib — the metric gate computes numbers; models/metrics.py exists so
+#     that eval/score_xg.py can do that without importing a plotting stack.
+#   prefect / dbt / mlflow / evidently / streamlit — orchestration, warehouse,
+#     tracking and dashboards all run locally against a real corpus. None of
+#     them has anything to say about whether this diff made retrieval worse.
+
+psycopg[binary]>=3.2
+python-dotenv>=1.0
+PyYAML>=6.0
+
+# Retrieval: TF-IDF is fitted from the fixture at startup, so there is no
+# prebuilt index to ship.
+numpy>=1.26
+scikit-learn>=1.4
+
+# xG: reads models/xg_portable.json.gz, which is committed.
+lightgbm>=4.0
+
+# Contracts. pandera pulls pandas, which is why the tests that exercise the
+# schemas are the only place pandas appears in CI.
+pandas>=2.0
+pandera>=0.20
+
+pytest>=8.0

@@ -41,9 +41,44 @@ export type SearchResponse = {
   took_ms: number;
   sequence_hint: string;
   filters: Record<string, unknown>;
-  ranker_uids: { sparse?: string[]; dense?: string[] };
+  ranker_uids: { sparse?: string[]; dense?: string[]; fused?: string[] };
+  /** Which ranker ordered these: "sparse", "fused", "learned" or "shape". */
+  ranker?: string;
+  /** Time the learned reranker spent, separate from took_ms. */
+  rerank_ms?: number | null;
+  /**
+   * Row id in search_log. POST it back to /click when a result is opened.
+   *
+   * Optional because search logging can be switched off server-side, and
+   * because the API deploys minutes behind this page — a build that assumed it
+   * was always present would send `undefined` to /click after every push.
+   */
+  search_id?: number | null;
   plan?: PlanResponse | null;
   note: NoteClaim[];
+};
+
+/** One possession rebuilt from the replayed event stream. See stream/producer.py. */
+export type LiveMessage = {
+  type: "token" | "possession_opened" | "possession_closed" | "replay_end";
+  /** Always "replay". These are recorded events, never a live feed. */
+  source: string;
+  possession?: number;
+  team?: string;
+  opponent?: string | null;
+  token?: string;
+  tokens?: string[];
+  token_string?: string;
+  zone_path?: string;
+  n_tokens?: number;
+  duration_s?: number;
+  minute?: number | null;
+  second?: number | null;
+  player?: string | null;
+  my_xg_sum?: number | null;
+  kept?: boolean;
+  shots?: { player: string | null; minute: number | null; my_xg: number | null;
+            note: string | null; outcome: string | null }[];
 };
 
 export type EventPoint = {
@@ -170,6 +205,28 @@ export async function possession(uid: string): Promise<PossessionDetail> {
   const r = await fetch(`${API}/possession/${encodeURIComponent(uid)}`);
   if (!r.ok) throw new Error(`possession failed: ${r.status}`);
   return r.json();
+}
+
+/**
+ * Report that a result was opened, and where it was ranked.
+ *
+ * Fire-and-forget by design. A click is a side effect of the user reading
+ * something: there is nothing to retry, nothing to show them if it fails, and
+ * nothing about opening a clip should depend on a logging table being up. The
+ * catch is therefore empty on purpose rather than by omission.
+ *
+ * `rank` is 1-based, matching what the user sees.
+ */
+export function reportClick(searchId: number | null | undefined,
+                            uid: string, rank: number): void {
+  if (!searchId) return;
+  fetch(`${API}/click?${qs({ search_id: searchId, possession_uid: uid, rank })}`,
+        { method: "POST", keepalive: true }).catch(() => {});
+}
+
+/** WebSocket URL for the replay feed, derived from the API origin. */
+export function liveUrl(): string {
+  return API.replace(/^http/, "ws") + "/live";
 }
 
 export async function meta(): Promise<Meta> {

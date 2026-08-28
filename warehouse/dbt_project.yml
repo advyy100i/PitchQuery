@@ -1,0 +1,21 @@
+name: pitchquery
+version: "1.0.0"
+config-version: 2
+
+profile: pitchquery
+
+model-paths: ["models"]
+test-paths: ["tests"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+models:
+  pitchquery:
+    # Staging stays as views: it is typing and unpacking, not computation, and
+    # a view costs nothing until something selects from it.
+    staging:
+      +materialized: view
+    # Marts are tables. mart_xg_features is what models/train_xg.py reads, and
+    # a training run should not re-parse 11k JSONB freeze frames to get it.
+    marts:
+      +materialized: table

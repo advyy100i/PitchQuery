@@ -49,10 +49,12 @@ pressure. That string is what gets indexed, ranked and searched.
 | **Retrieval** | P@5 **0.608**, MRR 0.751, p50 36 ms / p95 123 ms | 30 queries, relevance from per-query rubrics written *before* any results were seen; **87% agreement** with a human on a blind 71-item audit |
 | **xG model** | closes **76%** of the log-loss gap to StatsBomb's production model, and is live in the demo | held out the 2022 World Cup and 2023 Women's World Cup entirely; split by competition, never by shot |
 | **Query parsing** | **1 ms**, no LLM, no API key | 24/30 filter agreement with hand-written queries, and it holds on a held-out paraphrase set |
+| **Learned ranker** | NDCG@10 **0.540** against **0.407** for fixed reciprocal rank fusion | leave-one-query-out over 30 queries — a real gain whose 95% interval (±0.090) barely excludes zero, so read it as a direction, not a measurement |
+| **Metric gate** | a pull request that makes retrieval worse **cannot be merged** | GitHub Actions loads a committed 40k-possession fixture, reruns both evals and posts old/new/delta as a PR comment |
 
 Full write-ups: [retrieval](docs/retrieval_eval.md) ·
-[xG benchmark](docs/benchmark.md) · [planner](docs/planner_eval.md) ·
-[data](docs/ingest.md)
+[xG benchmark](docs/benchmark.md) · [learned ranker](docs/ranker_eval.md) ·
+[planner](docs/planner_eval.md) · [drift](docs/drift/) · [data](docs/ingest.md)
 
 ---
 
@@ -170,9 +172,20 @@ is 6 tokens against a corpus median of 13.
 
 This inflates the headline P@5, because most rubrics test for the presence of
 tokens rather than for the possession being a substantial passage of play. **The
-retrieval numbers above should be read as an upper bound** until length
-normalisation (BM25's `b`, or a length floor) is in and every eval is re-run.
-Shape search is unaffected — it never uses cosine similarity.
+sparse and fused numbers above should be read as an upper bound.** The learned
+ranker is the fix — `n_tokens / corpus_median` is one of its features precisely
+so that fusion can express "too short to be the move that was asked for" — but
+30 training queries is not enough to call it solved, and
+[`docs/ranker_eval.md`](docs/ranker_eval.md) says so in as many words. Shape
+search is unaffected; it never uses cosine similarity.
+
+**The eval set is 30 queries, and that is the binding constraint on the ranker** —
+not the model and not the features. `search_log` and `click_log` exist to grow it
+out of real use: a result someone opens at rank 5 or below is a ranking that was
+wrong, and `python -m pipeline.telemetry --write` collects exactly those into
+`eval/candidates.json` for hand-grading. Nothing reaches the eval set
+automatically. A rubric is a judgement, and an eval set generated from the
+ranker's own output agrees with it by construction.
 
 **The parser only knows the vocabulary written into it.** No alias table, so
 "PSG" is not a team. That case sits in the evaluation set as a deliberate
@@ -185,7 +198,23 @@ documented rather than hidden.
 **The hosted demo runs sparse-only.** torch is ~2.5 GB installed and takes
 resident memory from 252 MB to 570 MB, past the free tier's 512 MB. `/health`
 reports `"rankers": "sparse only"` rather than implying it is still fusing. The
-xG model is unaffected and does run there — it is 599 KB and 7 MB resident.
+xG model is unaffected and does run there — 599 KB and 7 MB resident — and so
+does the learned reranker, at 38 KB.
+
+**The match replay is a replay.** StatsBomb publish open data long after the
+match. `stream/producer.py` reads a cached file and sleeps the real gaps between
+events; nothing here is a live feed, every WebSocket message carries
+`source: "replay"`, and the UI panel is headed "Match replay". The pipeline
+underneath — possession state rebuilt incrementally, xG scored the moment a shot
+lands — is worth the same without the claim, and claiming live when it is not is
+the fastest way to lose the room.
+
+**CI measures a fixture, not the corpus.** Every number in a PR comment comes
+from `eval/fixtures/corpus.sql.gz`, a committed 40,000-possession sample whose
+relevant rows are chosen by the rubrics rather than by the ranker. That size was
+measured, not guessed: the first two attempts — 2,000 rows, then 10,000 —
+produced a gate that *passed* a ranker with the zone information deleted out of
+every token. `eval/fixtures/make_fixture.py` records what each attempt missed.
 
 ---
 
@@ -213,8 +242,56 @@ pip install -r requirements-ml.txt
 python eval/score_retrieval.py    # -> docs/retrieval_eval.md
 python eval/score_planner.py      # -> docs/planner_eval.md
 python models/train_xg.py; python models/evaluate_xg.py
+python models/train_ranker.py     # -> docs/ranker_eval.md
 python -m pytest tests/ -q
 ```
+
+### The platform layer
+
+Orchestration, the warehouse, tracking, monitoring, the replay and the
+dashboard. All local, all the open-source edition — the paid products with the
+same names (Prefect Cloud, dbt Cloud, Evidently Cloud, Grafana Cloud) are not
+used anywhere and are not needed for any of it.
+
+```powershell
+pip install -r requirements-pipeline.txt
+
+# Phases 1-4 — the whole ingest as one flow: retries, an incremental watermark,
+# dbt models and tests between the Python steps, Pandera contracts on every
+# batch before it is written.
+prefect server start                        # terminal 1, UI on :4200
+python -m pipeline.flows                    # terminal 2
+python -m pipeline.flows --comp 43:106      # or one competition
+
+cd warehouse; dbt deps; dbt build --profiles-dir .    # models and tests together
+dbt docs generate --profiles-dir .; dbt docs serve --profiles-dir .
+
+# Phase 5 — every run tracked; `champion` moves only on a better held-out
+# log-loss, and a losing run's artefacts are rolled back to the champion's.
+mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns
+
+# Phases 9-10 — drift reports and serving metrics.
+python monitoring/drift_report.py --split gender
+docker compose --profile obs up -d          # Grafana on :3001, admin/admin
+
+# Phase 11 — replay a recorded match through Kafka. Not a live feed.
+docker compose --profile stream up -d
+$env:PITCHQUERY_STREAM=1; uvicorn api.main:app --port 8000
+python stream/producer.py --match 3869685 --speed 60
+
+# Phase 12 — the operational dashboard.
+streamlit run dashboard/app.py
+
+# Phase 8 — turn the query log into an eval backlog.
+python -m pipeline.flows --nightly          # drift + candidates, as one flow
+```
+
+The metric gate runs on every pull request
+([`.github/workflows/eval.yml`](.github/workflows/eval.yml)): it loads the
+fixture corpus into a service container, reruns both eval scripts and
+`ci/compare_metrics.py`, and posts old/new/delta as a PR comment. A P@5 drop over
+0.02, or an xG log-loss rise over 0.005, fails the job. To move a baseline
+deliberately: `python eval/report.py retrieval xg`.
 
 `deploy/export_to_neon.py` ships a slim copy to hosted Postgres: dropping the
 raw JSONB, embeddings and tsvector takes 3.7 GB down to **424 MB**, which is why
@@ -226,7 +303,26 @@ the live demo carries the entire corpus rather than a subset.
 
 Python · PostgreSQL 16 + pgvector · scikit-learn · LightGBM ·
 sentence-transformers · FastAPI · Next.js · Docker ·
+Prefect · dbt · Pandera · MLflow · Evidently · Prometheus + Grafana ·
+Redpanda · Streamlit · GitHub Actions ·
 deployed on Vercel + Render + Neon
+
+**Orchestration, tracking and monitoring run locally via Docker profiles; only
+the API and the web app are hosted.** That is a decision rather than a gap: the
+free tier gives 512 MB and the API already uses 252 MB of it, so a metrics
+scraper or a broker living beside it would be paid for out of the product's
+memory. `docker compose up -d db` still starts exactly one container; everything
+else is behind `--profile obs` or `--profile stream`.
+
+Two things this deliberately does **not** have. A **feature store** would solve a
+problem that does not exist here — `core/features.py` and
+`core/rank_features.py` are imported by both the trainers and the API, which is
+the same no-skew guarantee in fifty lines and without a second source of truth to
+keep in step. And **DVC**: every metrics file carries a corpus fingerprint (row
+count plus an MD5 of the sorted possession uids) written by `eval/report.py`, so
+two numbers measured on different data are detected and reported as incomparable
+instead of being compared. Reproducibility without a second version-control
+system.
 
 **Data source: [StatsBomb Open Data](https://github.com/statsbomb/open-data)**,
 used under their open-data licence. StatsBomb is credited here, in the app

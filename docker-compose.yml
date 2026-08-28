@@ -1,3 +1,15 @@
+# Profiles, so that `docker compose up -d` still starts exactly one container.
+#
+#   docker compose up -d db            the database, and nothing else
+#   docker compose --profile obs up -d Prometheus + Grafana  (localhost:3001)
+#   docker compose --profile stream up -d   Redpanda for the match replay
+#
+# Everything past `db` is development-only and local-only. None of it goes near
+# the Render deployment: that box has 512 MB and the API already uses 252 MB of
+# it, so a metrics scraper living beside it would be paid for out of the
+# product's memory. Running the observability stack on the laptop and hosting
+# only the API and the web app is a decision, not a gap — see the README.
+
 services:
   db:
     image: pgvector/pgvector:pg16
@@ -19,6 +31,80 @@ services:
       timeout: 5s
       retries: 10
 
+  # --- observability (Phase 10) ----------------------------------------------
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: pitchquery-prometheus
+    profiles: ["obs"]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - pitchquery_prometheus:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      # Fifteen days of local development metrics. The default is fifteen days
+      # too; it is written down so that the disk cost is a decision.
+      - --storage.tsdb.retention.time=15d
+    extra_hosts:
+      # The API runs on the host with `uvicorn`, not in a container, so
+      # Prometheus has to reach back out. Explicit rather than relying on
+      # host.docker.internal resolving, which it does not on plain Linux.
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana-oss:11.3.1
+    container_name: pitchquery-grafana
+    profiles: ["obs"]
+    ports:
+      # 3001, because 3000 is the Next.js dev server.
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      # No sign-up, no anonymous access, no phoning home. This is one container
+      # on a laptop; Grafana Cloud is the paid product and nothing here uses it.
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      # Provisioned from files, so the dashboard is in the repo rather than in
+      # somebody's browser. A dashboard that only exists in a running container
+      # is a dashboard you rebuild from memory after every prune.
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - pitchquery_grafana:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+  # --- match replay (Phase 11) -----------------------------------------------
+
+  redpanda:
+    # Kafka API compatible, one container, no ZooKeeper, no schema registry to
+    # run. The community edition is free and this uses nothing outside it.
+    image: redpandadata/redpanda:v24.2.13
+    container_name: pitchquery-redpanda
+    profiles: ["stream"]
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=512M
+      - --overprovisioned
+      - --kafka-addr=PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:19092
+      - --advertise-kafka-addr=PLAINTEXT://redpanda:29092,OUTSIDE://localhost:19092
+    ports:
+      # 19092 from the host, 29092 from inside the compose network.
+      - "19092:19092"
+      - "9644:9644"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
 volumes:
   # Pinned to its real name. The project was renamed from "chalkline" to
   # PitchQuery, and renaming the volume key alongside it silently pointed
@@ -29,3 +115,5 @@ volumes:
   # name is pinned here and the key stays current.
   pitchquery_pgdata:
     name: tactic_retrieval_chalkline_pgdata
+  pitchquery_prometheus:
+  pitchquery_grafana:

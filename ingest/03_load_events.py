@@ -4,6 +4,11 @@ Idempotent. Every insert is an upsert keyed on the StatsBomb id, so re-running
 over the same cache changes nothing but the clock. Reads only from
 data/raw — run 02_fetch.py first.
 
+Every batch is checked against the Pandera contracts in pipeline/contracts.py
+before it is written (Phase 4), and the ingest watermark is advanced inside the
+same transaction as the insert (Phase 2), so a load that dies halfway leaves the
+mark on the last match that actually committed.
+
 Run:
   docker compose up -d db
   python ingest/03_load_events.py --init            # create schema, then load all cached matches
@@ -23,8 +28,24 @@ from core import db  # noqa: E402
 from core.config import RAW_DIR, REPO_ROOT  # noqa: E402
 from core.features import shot_row  # noqa: E402
 from core.zones import token as grammar_token  # noqa: E402
+from pipeline import watermark  # noqa: E402
+from pipeline.contracts import EventSchema, ShotSchema, check, frame  # noqa: E402
 
 BATCH = 5000
+
+# The INSERTs below are positional, so the contracts have to be told the column
+# order once. Keeping the two lists next to their statements is what stops a
+# column being added to one and not the other.
+EVENT_COLS = ["event_id", "match_id", "idx", "period", "minute", "second", "type",
+              "play_pattern", "possession", "possession_team", "team", "player",
+              "position", "x", "y", "end_x", "end_y", "under_pressure", "duration",
+              "token", "raw"]
+
+SHOT_COLS = ["event_id", "match_id", "competition_id", "season_id", "team", "player",
+             "x", "y", "distance", "angle", "body_part", "technique", "shot_type",
+             "first_time", "under_pressure", "play_pattern", "is_goal", "statsbomb_xg",
+             "freeze_frame", "n_def_in_cone", "dist_nearest_def", "gk_dist_to_goal",
+             "gk_off_line"]
 
 MATCH_SQL = """
 INSERT INTO matches (match_id, competition_id, season_id, competition, season,
@@ -131,7 +152,7 @@ def event_tuple(ev: dict, match_id: int) -> tuple:
     )
 
 
-def load_match(cur, path: Path, meta: dict) -> tuple:
+def load_match(cur, path: Path, meta: dict, *, validate: bool = True) -> tuple:
     """Returns (n_events, n_shots)."""
     match_id = int(path.stem)
     events = json.loads(path.read_text(encoding="utf-8"))
@@ -154,6 +175,14 @@ def load_match(cur, path: Path, meta: dict) -> tuple:
                 sr["gk_dist_to_goal"], sr["gk_off_line"],
             ))
 
+    # Validate before the write, not after. A contract checked on the way out of
+    # the database tells you the corpus is already wrong; checked here, the
+    # transaction rolls back and the watermark does not move.
+    if validate:
+        check(EventSchema, frame(rows, EVENT_COLS), where=f"match {match_id}")
+        if shots:
+            check(ShotSchema, frame(shots, SHOT_COLS), where=f"match {match_id}")
+
     for i in range(0, len(rows), BATCH):
         cur.executemany(EVENT_SQL, rows[i:i + BATCH])
     if shots:
@@ -161,34 +190,51 @@ def load_match(cur, path: Path, meta: dict) -> tuple:
     return len(rows), len(shots)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--init", action="store_true", help="apply sql/001_schema.sql and 002_indexes.sql first")
-    ap.add_argument("--limit", type=int, default=None, help="load at most N matches")
-    ap.add_argument("--match", type=int, action="append", help="load only these match ids")
-    args = ap.parse_args()
+def main(match_ids: list = None, *, init: bool = False, limit: int = None,
+         comps: list = None, validate: bool = True, advance: bool = True) -> dict:
+    """Load cached event JSON into Postgres.
 
+    `match_ids` is what ingest/02_fetch.py returns — pass it and only those
+    matches are loaded. Left as None, every cached file is loaded, which is the
+    original behaviour and what a bare `python ingest/03_load_events.py` does.
+
+    `advance` controls the Phase 2 watermark. It is only meaningful when matches
+    arrive in ascending id order, which is why the CLI turns it off for an
+    explicit `--match` load: a high-water mark set from an out-of-order load
+    would claim everything below it is present when it is not.
+
+    Returns {"rows": events loaded, "matches", "shots", "match_ids"}.
+    """
     conn = db.connect()
-    if args.init:
-        for name in ("001_schema.sql", "002_indexes.sql"):
+    if init:
+        for name in ("001_schema.sql", "002_indexes.sql", "003_watermark.sql"):
             db.apply_sql_file(conn, REPO_ROOT / "sql" / name)
         print(f"schema applied to {db.database_url().rsplit('@', 1)[-1]}")
+    watermark.ensure(conn)
 
     index = match_index()
     paths = sorted((RAW_DIR / "events").glob("*.json"), key=lambda p: int(p.stem))
-    if args.match:
-        wanted = set(args.match)
+    if match_ids is not None:
+        wanted = set(match_ids)
         paths = [p for p in paths if int(p.stem) in wanted]
-    if args.limit:
-        paths = paths[: args.limit]
+    if comps:
+        pairs = {tuple(int(v) for v in spec.split(":")) for spec in comps}
+        paths = [p for p in paths
+                 if (m := index.get(int(p.stem))) is not None
+                 and (m["competition_id"], m["season_id"]) in pairs]
+    if limit:
+        paths = paths[: limit]
 
     if not paths:
-        print(f"no cached event files in {RAW_DIR / 'events'} — run ingest/02_fetch.py first")
-        return
+        print(f"nothing to load from {RAW_DIR / 'events'} "
+              f"— everything requested is already past the watermark, or "
+              f"ingest/02_fetch.py has not run")
+        conn.close()
+        return {"rows": 0, "matches": 0, "shots": 0, "match_ids": []}
 
     t0 = time.time()
     n_ev = n_sh = n_ok = 0
-    skipped = []
+    loaded, skipped = [], []
     with conn.cursor() as cur:
         for i, path in enumerate(paths, 1):
             mid = int(path.stem)
@@ -196,10 +242,15 @@ def main():
             if meta is None:
                 skipped.append(mid)
                 continue
-            e, s = load_match(cur, path, meta)
+            e, s = load_match(cur, path, meta, validate=validate)
             n_ev += e
             n_sh += s
             n_ok += 1
+            loaded.append(mid)
+            if advance:
+                # Same cursor, therefore the same transaction as the inserts
+                # above. The commit below either lands both or neither.
+                watermark.advance(cur, meta["competition_id"], meta["season_id"], mid, e)
             conn.commit()
             if i % 25 == 0 or i == len(paths):
                 rate = i / max(time.time() - t0, 1e-9)
@@ -213,11 +264,30 @@ def main():
         cur.execute("SELECT (SELECT count(*) FROM matches), (SELECT count(*) FROM events), "
                     "(SELECT count(*) FROM shots), (SELECT count(*) FROM shots WHERE freeze_frame IS NOT NULL)")
         m, e, s, ff = cur.fetchone()
-    print(f"\nloaded {n_ok} matches in {time.time() - t0:.0f}s")
+    print()
+    print(f"loaded {n_ok} matches in {time.time() - t0:.0f}s")
     cover = f" ({ff / s * 100:.1f}% with freeze frames)" if s else ""
     print(f"db now holds: {m:,} matches, {e:,} events, {s:,} shots{cover}")
     conn.close()
+    return {"rows": n_ev, "matches": n_ok, "shots": n_sh, "match_ids": loaded}
+
+
+@db.cli
+def cli():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--init", action="store_true",
+                    help="apply sql/001_schema.sql, 002_indexes.sql and 003_watermark.sql first")
+    ap.add_argument("--limit", type=int, default=None, help="load at most N matches")
+    ap.add_argument("--match", type=int, action="append", help="load only these match ids")
+    ap.add_argument("--no-validate", action="store_true",
+                    help="skip the Pandera contracts (they cost a few seconds over the corpus)")
+    args = ap.parse_args()
+    main(args.match, init=args.init, limit=args.limit,
+         validate=not args.no_validate,
+         # An explicit match list is not necessarily in order and is usually a
+         # one-off repair, so it must not claim ground it has not covered.
+         advance=args.match is None)
 
 
 if __name__ == "__main__":
-    main()
+    cli()

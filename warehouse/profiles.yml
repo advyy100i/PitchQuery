@@ -1,0 +1,27 @@
+# Committed on purpose, and with no secret in it.
+#
+# Every value is an env_var, so this file describes the shape of the connection
+# and the environment supplies the connection. The defaults are the local
+# docker-compose setup from the repo root — the same credentials already
+# printed in docker-compose.yml, which is what makes them safe to write down.
+# CI and any hosted run override them with real environment variables.
+#
+# dbt looks for profiles in ~/.dbt by default, so every invocation passes
+# `--profiles-dir .` (see pipeline/flows.py and .github/workflows/eval.yml).
+
+pitchquery:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('PGHOST', 'localhost') }}"
+      port: "{{ env_var('PGPORT', '5433') | int }}"
+      user: "{{ env_var('PGUSER', 'pitchquery') }}"
+      password: "{{ env_var('PGPASSWORD', 'pitchquery') }}"
+      dbname: "{{ env_var('PGDATABASE', 'pitchquery') }}"
+      # Raw tables live in `public` and are owned by the Python loader. Anything
+      # dbt builds lands here instead, so `drop schema analytics cascade` can
+      # never take the corpus with it.
+      schema: "{{ env_var('PGSCHEMA', 'analytics') }}"
+      threads: 4
+      connect_timeout: 10

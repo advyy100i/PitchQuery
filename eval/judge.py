@@ -385,3 +385,39 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# --- graded relevance (Phase 7) ----------------------------------------------
+
+def grade(qid: str, row: dict) -> int:
+    """Relevance on 0-3, for training the learned ranker.
+
+    The thirty rubrics above are predicates: they answer "does this passage show
+    the pattern", which is a yes or a no. Turning each of them into four
+    hand-written tiers would be thirty new judgement calls with nothing to check
+    them against, and `eval/audit.py` only ever audited the binary version. So
+    the gradation is layered on top from OUTCOME instead:
+
+        0  the pattern is not there
+        1  the pattern is there
+        2  ...and it produced a shot
+        3  ...and it produced a goal
+
+    which is a defensible ordering for the actual user — a scout looking for
+    "crosses from the right that led to a chance" would rather see the ones that
+    became chances first — and it is reproducible, which thirty sets of tiers
+    would not be.
+
+    The constraint this creates is real and is enforced by omission: because the
+    label depends on `ended_in_shot` and `ended_in_goal`, neither may ever be a
+    ranker feature. Check core/rank_features.FEATURES before adding one; a model
+    given the outcome columns would learn the label instead of the ranking, and
+    would score beautifully offline while doing nothing at all.
+    """
+    if not judge(qid, row):
+        return 0
+    if row.get("ended_in_goal"):
+        return 3
+    if row.get("ended_in_shot"):
+        return 2
+    return 1

@@ -12,6 +12,7 @@ Run:
   uvicorn api.main:app --reload --port 8000
   open http://localhost:8000/docs
 """
+import asyncio
 import os
 import sys
 import time
@@ -21,10 +22,12 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import psycopg  # noqa: E402
-from fastapi import FastAPI, HTTPException, Query  # noqa: E402
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from api.schemas import (EventPoint, FreezeFramePlayer, NoteClaim,  # noqa: E402
+from api import telemetry  # noqa: E402
+from api.live import hub  # noqa: E402
+from api.schemas import (ClickAck, EventPoint, FreezeFramePlayer, NoteClaim,  # noqa: E402
                          PlanResponse, PlanTerm, PossessionDetail,
                          PossessionSummary, SearchResponse, ShotComparison,
                          ShotXG)
@@ -64,6 +67,14 @@ PRELOAD_SHAPES = _flag("PITCHQUERY_PRELOAD_SHAPES", True)
 # something to turn off before it starts dropping retrieval features.
 XG_ENABLED = _flag("PITCHQUERY_XG", True)
 
+# The Phase 7 learned reranker. On where the 38 KB artefact is present, because
+# it beats reciprocal rank fusion by 0.13 NDCG@10 under leave-one-query-out —
+# see docs/ranker_eval.md, which also says plainly how little confidence 30
+# training queries buys. Off with PITCHQUERY_RANKER=0, and overridable per
+# request, so the comparison against RRF stays one query string away rather than
+# a redeploy away.
+RANKER_ENABLED = _flag("PITCHQUERY_RANKER", True)
+
 # The 15 zones of the grid, for validating a drawn shape.
 VALID_ZONES = {f"{b}-{c}" for b in ("D", "M", "F")
                for c in ("L", "LI", "C", "RI", "R")}
@@ -85,6 +96,17 @@ async def lifespan(app: FastAPI):
     if PRELOAD_SHAPES:
         STATE["retriever"].load_shapes(STATE["conn"])
     STATE["xg"], STATE["xg_status"] = _load_xg()
+    # Load the reranker at boot rather than on the first search, for the same
+    # reason MiniLM is loaded here: nobody should pay an import inside a query.
+    if RANKER_ENABLED:
+        STATE["retriever"].ranker
+    # Phase 8. Creating the tables here means a fresh database gets them without
+    # a migration step; a database that will not take the DDL turns logging off
+    # and says so, rather than failing every search.
+    STATE["search_log"] = telemetry.ensure_tables(STATE["conn"])
+    # Phase 11. Off unless PITCHQUERY_STREAM=1 — Redpanda is a development
+    # container, and the API has to work without any of it.
+    STATE["live_status"] = hub.start(asyncio.get_running_loop())
     yield
     STATE["conn"].close()
 
@@ -115,11 +137,18 @@ app = FastAPI(title="PitchQuery", version="0.1",
               description="Tactical possession search over StatsBomb open data.",
               lifespan=lifespan)
 
+# Phase 10. Registered before the CORS middleware and before any route runs, so
+# every request is timed. Returns a status string rather than raising: a missing
+# metrics package degrades /metrics, not the product.
+METRICS_STATUS = telemetry.install(app)
+
 # The Next.js dev server runs on a different origin.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
-    allow_methods=["GET"],
+    # POST for /click. The frontend reports which result was opened, which is
+    # the only write this API accepts and the only reason it is not GET-only.
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -317,7 +346,42 @@ def health():
             "teams_known": len(STATE["vocab"].teams),
             # Say which rankers are actually live rather than implying fusion.
             "rankers": "sparse+dense (fused)" if _dense_on() else "sparse only",
-            "dense": _dense_on()}
+            "dense": _dense_on(),
+            # Same contract as xg_status: say why, not just no.
+            "learned_ranker": _ranker_on(),
+            "ranker_status": (STATE["retriever"].ranker_status if RANKER_ENABLED
+                              else "disabled by PITCHQUERY_RANKER=0"),
+            "search_log": bool(STATE.get("search_log")),
+            "metrics": METRICS_STATUS,
+            # Named "replay" and not "live" everywhere it appears. StatsBomb
+            # open data is published long after the match; a pipeline over it is
+            # a replay, and calling it live would be the one dishonest claim in
+            # the project.
+            "replay": STATE.get("live_status", "not started"),
+            "replay_clients": len(hub.clients)}
+
+
+@app.websocket("/live")
+async def live(websocket: WebSocket):
+    """Possessions rebuilt from the replayed event stream, token by token.
+
+    A REPLAY of recorded events, never a live feed — every message carries
+    `source: "replay"` and the UI shows it. See stream/producer.py.
+    """
+    await hub.connect(websocket)
+    try:
+        while True:
+            # Nothing is expected from the client; this is the standard way to
+            # keep the socket open and notice when it closes.
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        hub.disconnect(websocket)
+
+
+def _ranker_on() -> bool:
+    return RANKER_ENABLED and STATE["retriever"].ranker is not None
 
 
 def _dense_on() -> bool:
@@ -369,6 +433,9 @@ def search(
     ended_in_goal: Optional[bool] = None,
     limit: int = Query(20, ge=1, le=100),
     use_dense: bool = True,
+    use_ranker: Optional[bool] = Query(
+        None, description="learned reranker (Phase 7). Defaults to on where the "
+                          "artefact is present; set false to compare against RRF"),
 ):
     plan_response = None
     if q:
@@ -403,17 +470,64 @@ def search(
                                     # The deployment flag is authoritative: with
                                     # PITCHQUERY_DENSE=0 a caller cannot force a
                                     # MiniLM load onto a box that can't afford it.
-                                    use_dense=use_dense and _dense_on())
+                                    use_dense=use_dense and _dense_on(),
+                                    use_ranker=(RANKER_ENABLED if use_ranker is None
+                                                else use_ranker) and RANKER_ENABLED)
     rows = attach_my_xg(conn, hydrate(conn, out["results"]))
+    took_ms = round((time.perf_counter() - t0) * 1000, 1)
+
+    unparsed = (plan_response.ignored.split() if plan_response
+                and plan_response.ignored else [])
+    telemetry.observe_search(unparsed=unparsed, n_results=len(rows),
+                             ranker=out["ranker"], rerank_ms=out["rerank_ms"])
+    # Synchronous, because the id has to be in this response for the frontend to
+    # attach a click to it. One indexed insert; everything else about logging
+    # stays off the hot path. See api/telemetry.py.
+    search_id = telemetry.reserve_search_id(conn, {
+        "query_text": q, "parsed_filters": plan_response.filters if plan_response
+        else {k: v for k, v in f.__dict__.items() if v not in (None, [], {})},
+        "sequence_hint": sequence_hint, "unparsed_words": unparsed,
+        "ranker": out["ranker"], "latency_ms": took_ms,
+        "rerank_ms": out["rerank_ms"], "n_results": len(rows),
+        "n_candidates": out["n_candidates"],
+        "top_uids": [r["possession_uid"] for r in rows[:10]],
+    }) if STATE.get("search_log") else None
+
     return SearchResponse(
         results=[summary(r) for r in rows],
         n_candidates=out["n_candidates"],
-        took_ms=round((time.perf_counter() - t0) * 1000, 1),
+        took_ms=took_ms,
         sequence_hint=sequence_hint,
         filters={k: v for k, v in f.__dict__.items() if v not in (None, [], {})},
-        ranker_uids={"sparse": out["sparse"][:limit], "dense": out["dense"][:limit]},
+        ranker_uids={"sparse": out["sparse"][:limit], "dense": out["dense"][:limit],
+                     "fused": out.get("fused", [])[:limit]},
+        ranker=out["ranker"],
+        rerank_ms=out["rerank_ms"],
+        search_id=search_id,
         plan=plan_response,
         note=note_for(rows, f))
+
+
+@app.post("/click", response_model=ClickAck)
+def click(search_id: int = Query(..., description="from the /search response"),
+          possession_uid: str = Query(...),
+          rank: int = Query(..., ge=1, description="1-based position as shown")):
+    """Record that a result was opened.
+
+    The only write this API accepts, and the reason it exists is Phase 7 rather
+    than analytics: a result opened at rank 5 or below is a query the ranking got
+    wrong, and `pipeline/telemetry.py` collects exactly those for hand-grading.
+    Thirty hand-written eval queries is a small training set; this is how it
+    grows out of real use instead of out of imagination.
+
+    Returns 200 even when the write fails. A click is a side effect of the user
+    reading something; there is nothing for the frontend to retry, and nothing
+    it could usefully tell anyone.
+    """
+    ok = (telemetry.log_click(dbc(), search_id, possession_uid, rank)
+          if STATE.get("search_log") else False)
+    return ClickAck(recorded=ok, search_id=search_id,
+                    possession_uid=possession_uid, rank=rank)
 
 
 @app.get("/shape", response_model=SearchResponse)

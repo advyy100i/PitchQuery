@@ -1,0 +1,58 @@
+{
+  "split": "heldout",
+  "date": "2026-08-28",
+  "reference": "training competitions",
+  "current": "held-out competitions",
+  "n_reference": 7820,
+  "n_current": 3038,
+  "shifts": [
+    {
+      "feature": "gk_off_line",
+      "reference_mean": 2.4262471220260937,
+      "current_mean": 2.169420671494404,
+      "cohens_d": -0.12186183102982921,
+      "n_reference": 7818,
+      "n_current": 3038
+    },
+    {
+      "feature": "gk_dist_to_goal",
+      "reference_mean": 3.3013824028971603,
+      "current_mean": 3.077105820757077,
+      "cohens_d": -0.0931312277664387,
+      "n_reference": 7818,
+      "n_current": 3038
+    },
+    {
+      "feature": "n_def_in_cone",
+      "reference_mean": 0.820076726342711,
+      "current_mean": 0.9015799868334431,
+      "cohens_d": 0.07786100463063636,
+      "n_reference": 7820,
+      "n_current": 3038
+    },
+    {
+      "feature": "dist_nearest_def",
+      "reference_mean": 2.833995897258312,
+      "current_mean": 2.6727728355069122,
+      "cohens_d": -0.07312966809524099,
+      "n_reference": 7820,
+      "n_current": 3038
+    },
+    {
+      "feature": "angle_rad",
+      "reference_mean": 0.45920154902822247,
+      "current_mean": 0.4692646140460834,
+      "cohens_d": 0.03588461473090913,
+      "n_reference": 7820,
+      "n_current": 3038
+    },
+    {
+      "feature": "distance_m",
+      "reference_mean": 18.204755646112535,
+      "current_mean": 18.102865569486504,
+      "cohens_d": -0.012365346833314434,
+      "n_reference": 7820,
+      "n_current": 3038
+    }
+  ]
+}
