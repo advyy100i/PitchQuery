@@ -1,0 +1,34 @@
+version: 2
+
+sources:
+  - name: pitchquery
+    description: >
+      Bronze. Written by ingest/03_load_events.py, which is the only thing that
+      may write here. dbt reads these and never touches them, so a dropped
+      analytics schema costs a `dbt build` and not a re-ingest.
+    schema: public
+    tables:
+      - name: matches
+        columns:
+          - name: match_id
+            tests: [unique, not_null]
+      - name: events
+        description: One row per StatsBomb event, with the original JSON in `raw`.
+        columns:
+          - name: event_id
+            tests: [unique, not_null]
+      - name: shots
+        description: >
+          Shot geometry and freeze-frame context, computed by core/features.py at
+          load time. `statsbomb_xg` is a comparison column and is never a feature.
+        columns:
+          - name: event_id
+            tests: [unique, not_null]
+      - name: possessions
+        description: >
+          One row per possession with its token string. Built by
+          ingest/04_build_possessions.py — sequence logic over ordered events,
+          which is why it is Python and not a dbt model.
+        columns:
+          - name: possession_uid
+            tests: [unique, not_null]

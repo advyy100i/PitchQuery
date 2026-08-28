@@ -1,0 +1,104 @@
+version: 2
+
+models:
+  - name: stg_events
+    description: >
+      Typed event rows with the pass, shot, duel and dribble qualifiers unpacked
+      out of `raw`, plus the competition denormalised in from `matches`.
+    columns:
+      - name: event_id
+        description: StatsBomb's own uuid.
+        tests: [unique, not_null]
+      - name: match_id
+        tests:
+          - not_null
+          - relationships:
+              to: source('pitchquery', 'matches')
+              field: match_id
+      - name: idx
+        description: >
+          StatsBomb's `index` — the authoritative order within a match. Never
+          order by timestamp, which resets at each period.
+        tests: [not_null]
+      - name: x
+        description: >
+          Bounds carry the two-unit slack from core/config.py PITCH_MARGIN.
+          StatsBomb records a shot struck from on the goal line at x = 120.5,
+          and this corpus contains two of them.
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: -2
+              max_value: 122
+              config: {where: "x is not null"}
+      - name: y
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: -2
+              max_value: 82
+              config: {where: "y is not null"}
+      - name: pass_outcome
+        description: >
+          'Complete' where StatsBomb omitted the qualifier, which is how it
+          records a completed pass. Null for events that are not passes.
+        tests:
+          - accepted_values:
+              values: ["Complete", "Incomplete", "Out", "Pass Offside",
+                       "Injury Clearance", "Unknown"]
+              config: {where: "pass_outcome is not null"}
+
+  - name: stg_shots
+    description: >
+      Non-penalty shots with geometry recorded — the population an xG model is
+      allowed to see. `statsbomb_xg` rides along for comparison and is never a
+      feature.
+    columns:
+      - name: shot_id
+        tests: [unique, not_null]
+      - name: shot_type
+        description: Penalties are excluded upstream, so they must not appear here.
+        tests:
+          - accepted_values:
+              values: ["Open Play", "Free Kick", "Corner", "Kick Off"]
+      - name: distance_m
+        description: >
+          Distance to the goal centre at (120, 40), in StatsBomb pitch units.
+          The bound is 100, not the 60 the plan first suggested: 20 real
+          halfway-line shots sit between 60 and 93, and a test that fails on
+          correct data teaches you to ignore it. 100 still catches the failure
+          this test exists for — a shot recorded in the defending team's
+          coordinate frame lands past 110.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 100}
+      - name: angle_rad
+        description: Radians subtended by the goal mouth; 0 when the goal has no visible width.
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 3.1416}
+      - name: is_goal
+        tests: [not_null]
+      - name: statsbomb_xg
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+              config: {where: "statsbomb_xg is not null"}
+
+  - name: stg_freeze_frames
+    description: >
+      One row per player visible at the moment of a shot, with a `teammate`
+      flag. Consumers that want the defensive picture filter `not teammate`.
+    columns:
+      - name: shot_id
+        tests:
+          - not_null
+          - relationships: {to: ref('stg_shots'), field: shot_id}
+      - name: x
+        tests:
+          - dbt_utils.accepted_range: {min_value: -2, max_value: 122}
+      - name: y
+        tests:
+          - dbt_utils.accepted_range: {min_value: -2, max_value: 82}
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [shot_id, player_idx]

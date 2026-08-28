@@ -1,0 +1,84 @@
+version: 2
+
+models:
+  - name: mart_xg_features
+    description: >
+      The feature table models/train_xg.py reads. One row per non-penalty shot
+      with recorded geometry. `reference_statsbomb_xg` is the comparison column
+      and is dropped before anything is fitted.
+    columns:
+      - name: shot_id
+        tests: [unique, not_null]
+      - name: is_goal
+        tests: [not_null]
+      - name: distance_m
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 100}
+      - name: angle_rad
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 3.1416}
+      - name: n_def_in_cone
+        description: >
+          Opponents inside the triangle (shot, near post, far post), keeper
+          excluded. Computed in core/features.py so training and serving share
+          one implementation.
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 11
+              config: {where: "n_def_in_cone is not null"}
+      - name: gk_off_line
+        description: >
+          How far the keeper has advanced, as 120 - x. Both tails are real
+          football. Negative means the keeper is recorded behind his own goal
+          line, which is what a goal-line clearance looks like. Past 60 means he
+          is in the other half — the corpus has two such shots, both struck from
+          47 yards at a net the keeper had left to attack a corner. The bound is
+          the pitch, because anything wider than the pitch is a parsing error
+          and anything narrower fails on football that happened.
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: -5
+              max_value: 120
+              config: {where: "gk_off_line is not null"}
+      - name: reference_statsbomb_xg
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+              config: {where: "reference_statsbomb_xg is not null"}
+      - name: comp_season
+        description: The grouping key held out by the training split.
+        tests: [not_null]
+
+  - name: mart_team_possessions
+    description: >
+      One row per team per competition/season. Backs the Streamlit dashboard and
+      the row-counts-per-layer panel.
+    columns:
+      - name: team
+        tests: [not_null]
+      - name: n_possessions
+        tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1}
+      - name: n_events
+        description: >
+          Not null by construction: `possessions` is a strict subset of the
+          matches `events` covers, so a team on the possession side must have
+          events. If this ever fails, the join keys have drifted.
+        tests: [not_null]
+      - name: pass_completion
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 1
+              config: {where: "pass_completion is not null"}
+      - name: shot_rate
+        tests:
+          - dbt_utils.accepted_range: {min_value: 0, max_value: 1}
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [competition, season, team]
