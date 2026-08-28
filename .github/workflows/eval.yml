@@ -53,7 +53,13 @@ jobs:
       # Somewhere empty, so core/config.py finds no prebuilt TF-IDF pickle and
       # Retriever fits the index from the fixture instead. A stale pickle here
       # would silently measure the wrong matrix.
-      PITCHQUERY_DATA: ${{ runner.temp }}/pitchquery-data
+      #
+      # github.workspace and not runner.temp: the `runner` context does not
+      # exist at job level — only github, needs, strategy, matrix, vars, secrets
+      # and inputs do — and referencing it there is rejected before any job
+      # starts, as "Invalid workflow file". That failure reports zero jobs and a
+      # workflow named after its own path, which looks nothing like a bad step.
+      PITCHQUERY_DATA: ${{ github.workspace }}/.pitchquery-ci-data
       PITCHQUERY_DENSE: "0"
 
     steps:
