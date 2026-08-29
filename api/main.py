@@ -25,7 +25,7 @@ import psycopg  # noqa: E402
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
-from api import telemetry  # noqa: E402
+from api import ops as ops_view, telemetry  # noqa: E402
 from api.live import hub  # noqa: E402
 from api.schemas import (ClickAck, EventPoint, FreezeFramePlayer, NoteClaim,  # noqa: E402
                          PlanResponse, PlanTerm, PossessionDetail,
@@ -668,6 +668,22 @@ def shot(event_id: str):
         match_id=s["match_id"], team=s["team"], x=s["x"], y=s["y"],
         play_pattern=s["play_pattern"],
         freeze_frame=parse_freeze_frame(s["freeze_frame"]))
+
+
+@app.get("/ops")
+def ops():
+    """The operational view: pipeline, layers, champion model, drift, query log.
+
+    One endpoint and not five. The hosted API sleeps after 15 minutes idle and
+    takes ~50 s to wake, so five calls would each pay that wake-up and the page
+    would assemble itself over a minute. Cached for 60 seconds in api/ops.py.
+
+    Every section carries its own error and its own hint, because on a hosted
+    deployment three of the five legitimately cannot be answered — the watermark
+    and the dbt schemas are not in the Neon copy and MLflow is a file on a
+    laptop. Saying so is the report; a blank panel is a bug report.
+    """
+    return ops_view.snapshot(dbc)
 
 
 @app.get("/meta")

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import LivePanel from "../components/LivePanel";
 import Pitch from "../components/Pitch";
@@ -120,13 +121,20 @@ export default function Page() {
             Tactical possession search over open football data.  (Initial load may take 20–30 seconds)
           </p>
         </div>
-        <dl className="stats">
-          <div><dt>Possessions</dt>
-            <dd>{meta ? meta.possessions.toLocaleString() : "—"}</dd></div>
-          <div><dt>Matches</dt>
-            <dd>{meta ? meta.matches.toLocaleString() : "—"}</dd></div>
-          <div><dt>Teams</dt><dd>{meta ? meta.teams.length : "—"}</dd></div>
-        </dl>
+        <div className="header-side">
+          <dl className="stats">
+            <div><dt>Possessions</dt>
+              <dd>{meta ? meta.possessions.toLocaleString() : "—"}</dd></div>
+            <div><dt>Matches</dt>
+              <dd>{meta ? meta.matches.toLocaleString() : "—"}</dd></div>
+            <div><dt>Teams</dt><dd>{meta ? meta.teams.length : "—"}</dd></div>
+          </dl>
+          {/* The operational view: ingest, warehouse layers, champion model,
+              drift and the query log. Same app, same deploy. */}
+          <p className="small">
+            <Link className="linky" href="/pipeline">Pipeline &amp; data quality</Link>
+          </p>
+        </div>
       </header>
 
       <div className="modes">

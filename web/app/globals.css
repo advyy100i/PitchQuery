@@ -33,6 +33,17 @@
   --goal-wash: #e9f2ed;
   --warn: #9c4a2f;
 
+  /* Chart series. NOT --accent and --warn, and not for want of trying: those
+     are UI tokens picked to sit quietly under text, and --accent measures OKLCH
+     chroma 0.063 - under the 0.10 a data mark needs before it reads as grey
+     rather than as teal. These are the same two hues stepped up until they
+     pass, checked rather than eyeballed: deuteranope/protanope separation
+     dE 16.0, normal vision 25.9, both over 3:1 against --panel. Re-stepped for
+     dark below rather than flipped, because these two hexes fall outside the
+     dark lightness band. */
+  --s1: #0e9a94;
+  --s2: #a94608;
+
   /* Pitch. */
   --turf: #f2f4ef;
   --turf-alt: #eef1ea;
@@ -76,6 +87,9 @@
     --goal: #5fb488;
     --goal-wash: #142019;
     --warn: #cf8163;
+
+    --s1: #18a7a1;
+    --s2: #cf5604;
 
     --turf: #171b19;
     --turf-alt: #141816;
@@ -797,3 +811,323 @@ footer a { color: var(--accent); text-decoration-thickness: 1px;
 .tokens.block.small {
   font-size: 0.78rem;
 }
+
+/* --- the operational view (/pipeline) -------------------------------------- */
+/* Phase 12. This was a Streamlit page; it is the same app now, so it uses the
+   same paper, the same hairlines and the same three faces as the product. */
+
+.header-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.header-side .modes { margin: 0; }
+.header-side p { margin: 0; }
+
+.modes a {
+  border-radius: var(--radius-pill);
+  padding: 6px 16px;
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.modes a:hover { color: var(--ink); }
+
+.linky {
+  border: 0;
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.linky:hover:not(:disabled) { background: none; color: var(--accent-ink); }
+
+/* Held at reduced opacity while a refetch is in flight, rather than replaced by
+   a skeleton. A skeleton throws the layout away and puts it back, which reads
+   as the page reloading itself. */
+main.stale > *:not(header) {
+  opacity: 0.55;
+  transition: opacity 120ms var(--ease);
+}
+
+.panel {
+  margin-top: 36px;
+  padding-top: 22px;
+  border-top: 1px solid var(--line);
+}
+
+.panel > h2 { margin: 0; }
+.panel-note { max-width: 76ch; margin-bottom: 4px; }
+
+/* Why a panel is empty, in the panel. Three of the five genuinely cannot be
+   answered from the hosted deployment, and that is a fact about where the
+   pipeline runs rather than a failure — so it is set as a note, not an error. */
+.hint {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  background: var(--sunken);
+  border-left: 2px solid var(--line);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  max-width: 82ch;
+}
+
+.hint.warn {
+  color: var(--warn);
+  border-left-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+}
+
+/* Tiles wear the masthead's figure treatment on purpose. The serif numeral is
+   this project's; setting a second page's numbers in the UI sans would read as
+   a different product wearing the same header. */
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 26px 42px;
+  margin: 20px 0 2px;
+}
+
+.tiles div { display: flex; flex-direction: column; gap: 1px; }
+
+.tiles dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--faint);
+  font-weight: 600;
+}
+
+.tiles dd {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.tiles.one { margin: 0 0 8px; }
+.tiles.one dd { font-size: 20px; }
+
+/* ---------- tables -------------------------------------------------------- */
+
+.grid-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+.grid-table th {
+  text-align: left;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+  font-weight: 600;
+  padding: 0 10px 6px 0;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.grid-table td {
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink-soft);
+}
+
+.grid-table td:first-child { color: var(--ink); }
+.grid-table tr:last-child td { border-bottom: 0; }
+
+.grid-table .num, .grid-table th.num {
+  text-align: right;
+  padding-right: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- section layouts ----------------------------------------------- */
+
+.layer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(228px, 1fr));
+  gap: 26px 34px;
+  margin-top: 20px;
+}
+
+.layer dt { text-transform: uppercase; }
+
+.split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 26px 34px;
+  margin-top: 20px;
+  align-items: start;
+}
+
+.split h3 {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  font-weight: 600;
+  margin: 0 0 3px;
+}
+
+/* ---------- charts -------------------------------------------------------- */
+
+.chart-card {
+  margin: 0;
+  padding: 16px 16px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.chart-card figcaption {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-soft);
+  margin-bottom: 8px;
+}
+
+.chart { position: relative; }
+
+/* overflow visible so the direct label at the end of a line is never clipped by
+   the SVG box it happens to sit against. */
+.chart svg { display: block; overflow: visible; }
+
+/* Solid hairlines. A dashed grid reads as a threshold or a projection, and it
+   is neither — it is a grid. */
+.chart .grid { stroke: var(--line-soft); stroke-width: 1; }
+.chart .crosshair { stroke: var(--line); stroke-width: 1; }
+
+.chart .tick,
+.chart .direct {
+  font-family: var(--font-ui);
+  fill: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart .tick { font-size: 10px; }
+.chart .direct { font-size: 11px; fill: var(--muted); }
+.chart-empty { margin: 20px 0 8px; }
+
+/* Identity never rides on colour alone: a legend on every chart with two
+   series, a direct label at the end of every line, and the same numbers in a
+   table under both. */
+.legend {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 10px 0 0;
+  padding: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.legend li { display: inline-flex; align-items: center; gap: 6px; }
+
+.swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+  flex: none;
+}
+
+.tip {
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+  display: grid;
+  gap: 3px;
+  min-width: 122px;
+  padding: 7px 9px;
+  font-size: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+}
+
+.tip strong { font-size: 11px; font-weight: 600; color: var(--muted); }
+.tip span { display: flex; align-items: center; gap: 6px; color: var(--ink-soft); }
+
+.tip b {
+  margin-left: auto;
+  font-weight: 600;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.table-twin { margin-top: 12px; }
+.table-twin summary { cursor: pointer; width: fit-content; }
+.table-twin .grid-table { margin-top: 6px; }
+
+/* ---------- diverging bars ------------------------------------------------ */
+/* HTML boxes rather than SVG: half of this chart is text, and text inside a
+   viewBox that stretches to fit is text at whatever size the container decided.
+   Values sit outside the bar end always, so a bar too short to hold its label
+   is not a bar with a clipped label. */
+
+.dbars { margin-top: 4px; }
+
+.dbar-row,
+.dbar-axis {
+  display: grid;
+  grid-template-columns: minmax(92px, 33%) 1fr 54px;
+  align-items: center;
+  gap: 10px;
+}
+
+.dbar-row { margin-bottom: 8px; }
+
+.dbar-label {
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dbar-track {
+  position: relative;
+  height: 14px;
+  background: var(--sunken);
+  border-radius: var(--radius-sm);
+}
+
+/* The midpoint is neutral, and has to be: a hue at zero would make "no
+   difference" look like a third finding. */
+.dbar-zero {
+  position: absolute;
+  left: 50%;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--line);
+}
+
+.dbar-fill { position: absolute; top: 0; bottom: 0; }
+.dbar-fill.pos { background: var(--s2); border-radius: 0 4px 4px 0; }
+.dbar-fill.neg { background: var(--s1); border-radius: 4px 0 0 4px; }
+
+.dbar-value {
+  font-size: 12px;
+  color: var(--ink-soft);
+  text-align: right;
+}
+
+.dbar-axis { margin-top: 2px; }
+.dbar-scale { display: flex; justify-content: space-between; }

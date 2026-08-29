@@ -233,7 +233,10 @@ python ingest/05_embed.py
 
 uvicorn api.main:app --port 8000
 cd web; npm install; npm run dev         # http://localhost:3000
+                                         # and :3000/pipeline for the ops view
 ```
+
+Every command in one place: [`RUN.txt`](RUN.txt).
 
 Reproduce the numbers:
 
@@ -248,10 +251,19 @@ python -m pytest tests/ -q
 
 ### The platform layer
 
-Orchestration, the warehouse, tracking, monitoring, the replay and the
-dashboard. All local, all the open-source edition — the paid products with the
-same names (Prefect Cloud, dbt Cloud, Evidently Cloud, Grafana Cloud) are not
-used anywhere and are not needed for any of it.
+Orchestration, the warehouse, tracking, monitoring and the replay. All local,
+all the open-source edition — the paid products with the same names (Prefect
+Cloud, dbt Cloud, Evidently Cloud, Grafana Cloud) are not used anywhere and are
+not needed for any of it.
+
+The operational dashboard is not in this list, because it is not a separate
+process: it is [`/pipeline`](web/app/pipeline/page.tsx) in the Next.js app,
+reading one cached `/ops` call. It was a Streamlit page, which meant a second
+framework, a second host and a second thing to keep alive — and it looked
+nothing like the product it reported on. Each of its five panels still degrades
+on its own and now says *why*, which matters because the hosted deployment
+genuinely cannot answer three of them: `ingest_watermark` and the dbt schemas
+never ship to Neon, and MLflow is a SQLite file on a laptop.
 
 ```powershell
 pip install -r requirements-pipeline.txt
@@ -279,9 +291,6 @@ docker compose --profile stream up -d
 $env:PITCHQUERY_STREAM=1; uvicorn api.main:app --port 8000
 python stream/producer.py --match 3869685 --speed 60
 
-# Phase 12 — the operational dashboard.
-streamlit run dashboard/app.py
-
 # Phase 8 — turn the query log into an eval backlog.
 python -m pipeline.flows --nightly          # drift + candidates, as one flow
 ```
@@ -304,7 +313,7 @@ the live demo carries the entire corpus rather than a subset.
 Python · PostgreSQL 16 + pgvector · scikit-learn · LightGBM ·
 sentence-transformers · FastAPI · Next.js · Docker ·
 Prefect · dbt · Pandera · MLflow · Evidently · Prometheus + Grafana ·
-Redpanda · Streamlit · GitHub Actions ·
+Redpanda · GitHub Actions ·
 deployed on Vercel + Render + Neon
 
 **Orchestration, tracking and monitoring run locally via Docker profiles; only

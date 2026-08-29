@@ -1,0 +1,80 @@
+PITCHQUERY — HOW TO START IT
+PowerShell, from the repo root. Every block is copy-pasteable as-is.
+
+
+0. ONCE, ON A NEW MACHINE
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   copy .env.example .env
+   cd web; npm install; cd ..
+
+
+1. THE PRODUCT — three terminals
+   docker compose up -d db              Postgres 16 + pgvector on :5433
+   uvicorn api.main:app --port 8000     API      -> localhost:8000/docs
+   cd web; npm run dev                  web app  -> localhost:3000
+                                        the operational view is at :3000/pipeline
+
+   First time only, once the database is up (~25 min — see docs/ingest.md):
+     python ingest/02_fetch.py --comp 43:106 --comp 72:107
+     python ingest/03_load_events.py --init
+     python ingest/04_build_possessions.py
+     python ingest/05_embed.py
+
+
+2. THE PLATFORM LAYER — optional, none of it is needed for section 1
+   pip install -r requirements-pipeline.txt
+
+   prefect server start                 orchestration UI -> :4200
+   python -m pipeline.flows             the whole ingest as one flow
+   python -m pipeline.flows --nightly   drift + eval candidates
+
+   cd warehouse; dbt deps; dbt build --profiles-dir .     models and tests together
+   dbt docs generate --profiles-dir .; dbt docs serve --profiles-dir .
+
+   mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlruns
+                                        runs + model registry -> :5000
+   python monitoring/drift_report.py --split gender        -> docs/drift/
+   docker compose --profile obs up -d   Prometheus + Grafana -> :3001, admin/admin
+
+   Match replay — a replay of recorded events, never a live feed:
+     docker compose --profile stream up -d
+     $env:PITCHQUERY_STREAM=1; uvicorn api.main:app --port 8000
+     python stream/producer.py --match 3869685 --speed 60
+
+
+3. REPRODUCE THE NUMBERS
+   pip install -r requirements-ml.txt
+   python eval/score_retrieval.py       -> docs/retrieval_eval.md
+   python eval/score_planner.py         -> docs/planner_eval.md
+   python models/train_xg.py; python models/evaluate_xg.py
+   python models/train_ranker.py        -> docs/ranker_eval.md
+   python ci/compare_metrics.py         the pull-request metric gate, locally
+   python -m pytest tests/ -q
+
+
+4. STOP
+   docker compose --profile obs --profile stream down
+   Ctrl-C the uvicorn / npm / prefect / mlflow terminals.
+
+
+PORTS
+   3000  web app            5000  MLflow            9090  Prometheus
+   3001  Grafana            5433  Postgres         19092  Redpanda
+   4200  Prefect            8000  API
+
+
+DEPLOYED
+   web  Vercel  https://pitch-query.vercel.app         push to main
+   api  Render  https://pitchquery-api.onrender.com    push to main, ~50 s cold start
+   db   Neon    python deploy/export_to_neon.py --target <connection-url>
+
+   The operational dashboard is /pipeline inside the same Next.js app and reads
+   the API's /ops endpoint, so it ships with the frontend. There is no separate
+   dashboard process to start, locally or in production.
+
+   Two variables are set by hand in the Render dashboard, not in render.yaml:
+   DATABASE_URL (the Neon URL, with ?sslmode=require) and
+   PITCHQUERY_CORS_ORIGINS (the Vercel URL). Vercel needs NEXT_PUBLIC_API_URL
+   pointed at the Render URL.
