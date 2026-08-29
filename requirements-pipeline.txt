@@ -32,6 +32,3 @@ prometheus-fastapi-instrumentator>=7.0
 
 # Phase 11: the match replay. Talks to Redpanda under the `stream` profile.
 confluent-kafka>=2.5
-
-# Phase 12: the operational dashboard.
-streamlit>=1.38

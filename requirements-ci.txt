@@ -7,9 +7,9 @@
 #     minutes to download a dense model that would then be measured on a fixture.
 #   matplotlib — the metric gate computes numbers; models/metrics.py exists so
 #     that eval/score_xg.py can do that without importing a plotting stack.
-#   prefect / dbt / mlflow / evidently / streamlit — orchestration, warehouse,
-#     tracking and dashboards all run locally against a real corpus. None of
-#     them has anything to say about whether this diff made retrieval worse.
+#   prefect / dbt / mlflow / evidently — orchestration, warehouse, tracking
+#     and monitoring all run locally against a real corpus. None of them has
+#     anything to say about whether this diff made retrieval worse.
 
 psycopg[binary]>=3.2
 python-dotenv>=1.0

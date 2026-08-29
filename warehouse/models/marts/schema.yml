@@ -55,8 +55,8 @@ models:
 
   - name: mart_team_possessions
     description: >
-      One row per team per competition/season. Backs the Streamlit dashboard and
-      the row-counts-per-layer panel.
+      One row per team per competition/season. Backs the gold row count on the
+      /pipeline view.
     columns:
       - name: team
         tests: [not_null]
