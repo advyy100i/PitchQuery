@@ -139,6 +139,13 @@ def main():
     ap.add_argument("--matches", type=int, default=None,
                     help="ship only the N most recent matches (default: all)")
     ap.add_argument("--dry-run", action="store_true", help="report sizes, copy nothing")
+    ap.add_argument("--only", metavar="T1,T2",
+                    help="copy only these tables. The schema, the indexes and "
+                         "--dbt still run. For topping up a database that is "
+                         "already correct — a full run TRUNCATEs every table, "
+                         "and re-copying 1.6M event rows to add two watermark "
+                         "rows means a live demo serves an empty corpus for the "
+                         "several minutes it takes")
     ap.add_argument("--dbt", action="store_true",
                     help="also build the dbt models the hosted copy can support "
                          "(stg_shots, stg_freeze_frames, mart_xg_features)")
@@ -149,12 +156,18 @@ def main():
     scope = f"{len(ids)} matches" if ids else "all matches"
 
     tables = TABLES
+    if args.only:
+        want = {t.strip() for t in args.only.split(",") if t.strip()}
+        unknown = want - {t[0] for t in TABLES}
+        if unknown:
+            sys.exit(f"--only: no such table: {', '.join(sorted(unknown))}")
+        tables = [t for t in TABLES if t[0] in want]
     if ids:
         # The watermark says the loader reached match X. Ship it beside a subset
         # that stops short of X and the Ingest panel reports rows that are not
         # in the database it is describing — which is worse than the panel
         # saying it has nothing to report.
-        tables = [t for t in TABLES if t[0] not in NO_MATCH_FILTER]
+        tables = [t for t in tables if t[0] not in NO_MATCH_FILTER]
         print("note: --matches is set, so ingest_watermark is not shipped — it "
               "would describe a fuller load than this copy holds")
 
