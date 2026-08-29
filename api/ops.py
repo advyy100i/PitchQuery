@@ -146,7 +146,7 @@ def layers(conn) -> dict:
     missing = [t["table"] for t in tables if t["state"] == "missing"]
     return {"tables": tables,
             "hint": (f"Not built here: {', '.join(missing)}. The dbt layers are "
-                     f"local — `cd warehouse && dbt build --profiles-dir .`")
+                     f"built locally — `cd warehouse && dbt build --profiles-dir .`")
                     if missing else None}
 
 
@@ -200,11 +200,12 @@ def champion() -> dict:
             "commit": (snap.get("tags") or {}).get("git_commit"),
             "exported_at": snap.get("exported_at"),
             "error": None,
-            "note": (f"The registry itself is not reachable here ({why}) — it is a "
-                     f"local SQLite store. These are its numbers, exported when "
-                     f"the champion alias last moved and committed as "
-                     f"models/champion.json, so they are the registry's answer "
-                     f"rather than a live read of it. Rewrite it with "
+            "note": (f"MLflow is not running here ({why}) — it is a SQLite file on "
+                     f"the machine that trains the models. These numbers still "
+                     f"come from it: they were saved to `models/champion.json` "
+                     f"when this model became champion, and committed to the "
+                     f"repo. So they are the registry's own figures, but a "
+                     f"snapshot of them rather than a live read. Update it with "
                      f"`python -m models.tracking --export`."),
         }
 
@@ -228,10 +229,11 @@ def champion() -> dict:
         "commit": None,
         "exported_at": None,
         "error": None,
-        "note": (f"Neither the registry ({why}) nor models/champion.json is here, "
-                 f"so this is eval/baselines/xg.json — what the shipped artefact "
-                 f"scored on the held-out competitions, committed to the repo. "
-                 f"Which registry version is serving is not something it knows."),
+        "note": (f"Neither MLflow ({why}) nor `models/champion.json` is here, so "
+                 f"these come from `eval/baselines/xg.json` — the score the "
+                 f"shipped model got on competitions it was never trained on, "
+                 f"committed to the repo. That file cannot say which registry "
+                 f"version is live, so the version is left out."),
     }
 
 
@@ -295,8 +297,9 @@ def queries(conn) -> dict:
     except psycopg.Error as exc:
         return {"daily": [], "unparsed": [], "deep_clicks": [], "totals": {},
                 "error": str(exc).strip(),
-                "hint": "search_log and click_log are created on API startup. "
-                        "PITCHQUERY_SEARCH_LOG=0 switches the writes off."}
+                "hint": "`search_log` and `click_log` are created when the API "
+                        "starts. Setting `PITCHQUERY_SEARCH_LOG=0` turns the "
+                        "writes off."}
     for d in daily:
         d["day"] = _iso(d["day"])
         d["searches"] = int(d["searches"])

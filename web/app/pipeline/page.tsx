@@ -133,8 +133,9 @@ export default function Pipeline() {
         <div>
           <h1>Pipeline</h1>
           <p className="lede">
-            The operational view of PitchQuery: ingest, the warehouse layers, the
-            champion model, feature drift and the query log.
+Is the pipeline healthy? Five checks: what loaded, what dbt
+            built, which model is live, whether the data has shifted, and what
+            people are searching for.
           </p>
         </div>
         <div className="header-side">
@@ -154,13 +155,13 @@ export default function Pipeline() {
       </header>
 
       {error && <p className="error">{error}</p>}
-      {!data && !error && <p className="muted">Reading the database… the hosted API sleeps after 15 minutes idle and takes ~50 s to wake.</p>}
+      {!data && !error && <p className="muted">Loading… the hosted API sleeps after 15 minutes idle, so the first request can take about 50 seconds.</p>}
 
       {data && (
         <>
           <Panel
             title="Ingest"
-            note="From ingest_watermark, which the loader advances inside the same transaction as its inserts. It is the record of what committed, not of what was attempted — a flow that failed halfway leaves this pointing at the last match that landed."
+            note="How far the loader got in each competition, from the ingest_watermark table. It is updated in the same transaction as the rows it loaded, so if a run dies halfway through, this still points at the last match that actually saved."
           >
             <Hint text={data.pipeline.error ? data.pipeline.hint : null} />
             <Hint text={!data.pipeline.error ? data.pipeline.hint : null} />
@@ -196,7 +197,7 @@ export default function Pipeline() {
 
           <Panel
             title="Rows per layer"
-            note="Bronze is written by Python, silver and gold by dbt. A gold table that has not kept up with bronze means dbt build has not run since the last ingest."
+            note="Python writes the bronze tables; dbt builds silver and gold from them. If a gold table is behind bronze, dbt build has not run since the last ingest."
           >
             <div className="layer-grid">
               {(["bronze", "silver", "gold"] as const).map((layer) => (
@@ -215,7 +216,7 @@ export default function Pipeline() {
                           <td className="num">
                             {t.rows === null
                               ? <span className="muted">not built</span>
-                              : <>{t.estimated && <span className="muted" title="count(*) passed the 3 s ceiling; this is the planner's estimate">≈ </span>}{int(t.rows)}</>}
+                              : <>{t.estimated && <span className="muted" title="Counting every row took longer than 3 seconds, so this is Postgres's own estimate">≈ </span>}{int(t.rows)}</>}
                           </td>
                         </tr>
                       ))}
@@ -229,7 +230,7 @@ export default function Pipeline() {
 
           <Panel
             title="Champion xG model"
-            note="The champion alias only moves when a run's held-out log-loss beats the incumbent. That rule is code in models/tracking.py, not a habit."
+            note="The model currently being served. A newly trained model only replaces it if it scores better on competitions it was never trained on. models/tracking.py checks that automatically, so it is not a step anyone can forget."
           >
             <Tiles items={champTiles} />
             <p className="small muted">
@@ -259,7 +260,7 @@ export default function Pipeline() {
 
           <Panel
             title="Feature drift"
-            note="Reported as effect size, not as a drift verdict. Over thousands of shots a statistical test calls nearly every column drifted; Cohen's d says how far apart the distributions actually are."
+            note="Has the data changed shape? Each bar is Cohen's d — how far apart two groups of shots are for that feature. A pass/fail significance test would be useless here: with thousands of shots it flags nearly every column, without saying whether the gap is big enough to matter."
           >
             <Hint text={data.drift.hint} />
             {shown && (
@@ -313,8 +314,8 @@ export default function Pipeline() {
                   </table>
                 </div>
                 <p className="small muted">
-                  Anything under about |0.2| is a difference you would struggle to
-                  see. Reports are written by{" "}
+                  A gap smaller than about 0.2 either way is too small to notice in
+                  practice. Reports are written by{" "}
                   <code>python monitoring/drift_report.py</code> and committed to{" "}
                   <code>docs/drift/</code>.
                 </p>
@@ -324,7 +325,7 @@ export default function Pipeline() {
 
           <Panel
             title="Queries"
-            note="From search_log and click_log. The vocabulary table is the useful artefact: it is the list of words the parser does not know, written by the people using it."
+            note="What people actually searched for, from search_log and click_log. The most useful part is the list of words the parser did not understand — a to-do list written by the people using it rather than guessed at."
           >
             <Hint text={q?.error ? q.hint : null} kind="warn" />
             <Hint text={!q?.error ? q?.hint : null} />
@@ -365,8 +366,9 @@ export default function Pipeline() {
                   <div>
                     <h3>Words the parser could not place</h3>
                     <p className="small muted">
-                      A to-do list for <code>core/planner.py</code> written by
-                      users rather than guessed at.
+                      Every word here is one someone searched for and{" "}
+                      <code>core/planner.py</code> could not place. Each is a
+                      candidate for the vocabulary.
                     </p>
                     {q.unparsed.length ? (
                       <table className="grid-table">
@@ -386,8 +388,9 @@ export default function Pipeline() {
                   <div>
                     <h3>Results opened at rank 5 or below</h3>
                     <p className="small muted">
-                      Rankings that were wrong — the answer was there and the
-                      ranker put it where nobody looks.
+                      Rankings that were wrong: the result someone wanted was
+                      there, but buried far enough down that they had to go
+                      looking for it.
                     </p>
                     {q.deep_clicks.length ? (
                       <table className="grid-table">
@@ -407,8 +410,10 @@ export default function Pipeline() {
                     ) : (
                       <p className="muted small">
                         None yet. <code>python -m pipeline.telemetry --write</code>{" "}
-                        collects these into <code>eval/candidates.json</code> for
-                        hand-grading. Nothing reaches the eval set automatically.
+                        gathers them into <code>eval/candidates.json</code> to be
+                        graded by hand. Nothing is added to the eval set
+                        automatically — a grade is a judgement, and a set built
+                        from the ranker's own output would just agree with it.
                       </p>
                     )}
                   </div>
@@ -420,10 +425,11 @@ export default function Pipeline() {
       )}
 
       <footer className="muted small">
-        Orchestration (Prefect), the warehouse (dbt), tracking (MLflow),
-        monitoring (Prometheus/Grafana) and the match replay (Redpanda) run
-        locally via Docker profiles. Only the API and this app are hosted,
-        because the free tier gives 512 MB and the API already uses 252 MB.
+Prefect, dbt, MLflow, Prometheus, Grafana and Redpanda all run on a
+        laptop under Docker profiles. Only the API and this web app are hosted:
+        the free tier gives 512 MB of memory and the API already uses 252 MB of
+        it, so anything else running beside it would come out of the product's
+        budget.
         {" "}Data source:{" "}
         <a href="https://github.com/statsbomb/open-data">StatsBomb Open Data</a>.
       </footer>
