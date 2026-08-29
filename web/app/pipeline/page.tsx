@@ -10,10 +10,15 @@
  * design, deployed by the same push.
  *
  * The point of the panel-level hints is that a hosted deployment cannot answer
- * three of the five, and that is the true state rather than a failure: the
- * watermark and the dbt schemas never ship to Neon, and MLflow is a SQLite file
- * on a laptop. Each panel says which and why. A page that goes blank because
- * one dependency is absent gets closed and never opened again.
+ * all of it from the database in front of it, and that is the true state rather
+ * than a failure: the watermark and the dbt schemas never ship to Neon. Each
+ * panel says which and why. A page that goes blank because one dependency is
+ * absent gets closed and never opened again.
+ *
+ * The champion panel is the one that stopped being a gap. MLflow is still a
+ * local SQLite store, but its answer is exported when the champion changes and
+ * committed, so this reports the real version and its real metrics — and says
+ * "exported" rather than dressing a file up as a live registry read.
  */
 
 import Link from "next/link";
@@ -48,10 +53,22 @@ function Panel({ title, note, children }: {
   );
 }
 
-/** Why a panel is empty, in the panel, where the answer is needed. */
+/**
+ * Why a panel is empty, in the panel, where the answer is needed.
+ *
+ * The hints name commands and tables, and they are written in the API where
+ * there is no markup — so the backtick spans get set as code here rather than
+ * printed as backticks, which is the one thing on this page that would look
+ * like unformatted output.
+ */
 function Hint({ text, kind = "info" }: { text?: string | null; kind?: "info" | "warn" }) {
   if (!text) return null;
-  return <p className={`hint ${kind}`}>{text}</p>;
+  return (
+    <p className={`hint ${kind}`}>
+      {text.split("`").map((part, i) =>
+        i % 2 ? <code key={i}>{part}</code> : <span key={i}>{part}</span>)}
+    </p>
+  );
 }
 
 function Tiles({ items }: { items: [string, string][] }) {
@@ -216,13 +233,18 @@ export default function Pipeline() {
           >
             <Tiles items={champTiles} />
             <p className="small muted">
-              {champ?.source === "mlflow" ? (
+              {/* The registry and its committed export describe the same run, so
+                  they get the same line. Only the source label differs, and it
+                  differs on purpose: one is a live read and one is not. */}
+              {champ?.version ? (
                 <>
-                  MLflow registry, version <strong>v{champ.version}</strong>
+                  MLflow registry{champ.source === "snapshot" && " (exported)"},
+                  {" "}version <strong>v{champ.version}</strong>
                   {champ.commit && <> at commit <code>{sha(champ.commit)}</code></>}
                   {champ.params?.n_train_shots && <> · {String(champ.params.n_train_shots)} training shots</>}
                   {champ.params?.test_comps && <> · held out {String(champ.params.test_comps)}</>}
                   {champ.params?.calibration && <> · calibration {String(champ.params.calibration)}</>}
+                  {champ.exported_at && <> · snapshot taken {stamp(champ.exported_at)} UTC</>}
                 </>
               ) : (
                 <>

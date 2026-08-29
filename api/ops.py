@@ -11,11 +11,15 @@ is a second thing to keep alive, and it looked nothing like the thing it was
 reporting on.
 
 Every section degrades on its own and says WHY, which matters more here than
-anywhere else in this API: the hosted deployment genuinely cannot answer three
-of the five. `ingest_watermark` and the dbt schemas never reach Neon —
-deploy/export_to_neon.py copies four tables and no others — and MLflow is a
-SQLite file on a laptop. "Not here, and here is where it lives" is the true
-answer. A blank panel reads as broken.
+anywhere else in this API: the hosted deployment cannot answer all of it from
+the database in front of it. `ingest_watermark` and the dbt schemas never reach
+Neon — deploy/export_to_neon.py copies four tables and no others. "Not here,
+and here is where it lives" is the true answer; a blank panel reads as broken.
+
+The champion model used to be a third such gap and is not any more. MLflow is
+still a SQLite file on a laptop, but the registry's answer is now exported when
+the champion changes and committed, so the hosted page reports the real version
+and its real metrics — see champion().
 
 Cached for 60 seconds. Fifteen counts and four aggregates is not something to
 run per page load against a free tier, and nothing reported here moves faster.
@@ -54,6 +58,10 @@ LAYERS = [
 # AS an estimate — a different number, labelled as one, rather than a precise
 # figure that is quietly late.
 COUNT_TIMEOUT_MS = 3000
+
+# What the registry said about the champion when it last changed, written by
+# models/tracking.py:export_champion() and committed. See champion().
+CHAMPION_SNAPSHOT = REPO_ROOT / "models" / "champion.json"
 
 BASELINE_XG = REPO_ROOT / "eval" / "baselines" / "xg.json"
 
@@ -145,13 +153,21 @@ def layers(conn) -> dict:
 # --- 3. the champion model ----------------------------------------------------
 
 def champion() -> dict:
-    """MLflow if it is reachable, the committed baseline if it is not.
+    """The registry if it is here, its committed answer if it is not.
 
-    The fallback is not a lesser version of the same thing and is not presented
-    as one: `eval/baselines/xg.json` is what the shipped artefact scored on the
-    held-out competitions, written by eval/report.py and committed. It is the
-    number in docs/benchmark.md. What it cannot tell you is which registry
-    version is serving, so that field is absent rather than guessed.
+    Three steps, and the response says which one answered rather than letting
+    the page imply a live read.
+
+      1. MLflow. Only ever true on a machine with the SQLite store — which is
+         the machine that trained the model.
+      2. models/champion.json. The registry's own answer, exported at the
+         moment the champion alias moved and committed beside the artefact it
+         describes. Installing mlflow on the hosted box would not replace this:
+         there would still be no store there to read.
+      3. eval/baselines/xg.json — what the shipped artefact scored on the
+         held-out competitions. Not a lesser version of the same thing, and not
+         presented as one: it knows the metrics but cannot know which registry
+         version is serving, so that field stays absent rather than guessed.
     """
     try:
         import mlflow
@@ -165,33 +181,58 @@ def champion() -> dict:
         run = client.get_run(version.run_id)
         return {"source": "mlflow", "version": str(version.version),
                 "metrics": run.data.metrics, "params": run.data.params,
-                "commit": run.data.tags.get("git_commit"), "error": None}
+                "commit": run.data.tags.get("git_commit"), "exported_at": None,
+                "error": None}
     except Exception as exc:                       # not installed, or no registry
-        try:
-            b = json.loads(BASELINE_XG.read_text(encoding="utf-8"))
-        except Exception as read_exc:
-            return {"source": None, "error": f"{exc}", "read_error": str(read_exc),
-                    "metrics": {}, "params": {}}
+        why = type(exc).__name__
+
+    try:
+        snap = json.loads(CHAMPION_SNAPSHOT.read_text(encoding="utf-8"))
+    except Exception:
+        snap = None
+
+    if snap:
         return {
-            "source": "baseline",
-            "version": None,
-            "metrics": {"log_loss": b.get("logloss"), "brier": b.get("brier"),
-                        "ece": b.get("ece"), "auc": b.get("auc"),
-                        "statsbomb_log_loss": b.get("statsbomb_logloss"),
-                        "log_loss_gap": b.get("logloss_gap_to_statsbomb"),
-                        "observed_over_expected": b.get("observed_over_expected")},
-            "params": {"n_shots": b.get("n_shots"),
-                       "test_comps": ", ".join(b.get("test_comps") or []),
-                       "scope": b.get("scope"),
-                       "measured_at": b.get("measured_at")},
-            "commit": None,
+            "source": "snapshot",
+            "version": snap.get("version"),
+            "metrics": snap.get("metrics") or {},
+            "params": snap.get("params") or {},
+            "commit": (snap.get("tags") or {}).get("git_commit"),
+            "exported_at": snap.get("exported_at"),
             "error": None,
-            "note": (f"MLflow is not reachable here ({type(exc).__name__}), so this "
-                     f"is eval/baselines/xg.json — what the shipped artefact scored "
-                     f"on the held-out competitions, committed to the repo. The "
-                     f"registry is a local SQLite store; start it with "
-                     f"`mlflow server --backend-store-uri sqlite:///mlflow.db`."),
+            "note": (f"The registry itself is not reachable here ({why}) — it is a "
+                     f"local SQLite store. These are its numbers, exported when "
+                     f"the champion alias last moved and committed as "
+                     f"models/champion.json, so they are the registry's answer "
+                     f"rather than a live read of it. Rewrite it with "
+                     f"`python -m models.tracking --export`."),
         }
+
+    try:
+        b = json.loads(BASELINE_XG.read_text(encoding="utf-8"))
+    except Exception as read_exc:
+        return {"source": None, "error": why, "read_error": str(read_exc),
+                "metrics": {}, "params": {}}
+    return {
+        "source": "baseline",
+        "version": None,
+        "metrics": {"log_loss": b.get("logloss"), "brier": b.get("brier"),
+                    "ece": b.get("ece"), "auc": b.get("auc"),
+                    "statsbomb_log_loss": b.get("statsbomb_logloss"),
+                    "log_loss_gap": b.get("logloss_gap_to_statsbomb"),
+                    "observed_over_expected": b.get("observed_over_expected")},
+        "params": {"n_shots": b.get("n_shots"),
+                   "test_comps": ", ".join(b.get("test_comps") or []),
+                   "scope": b.get("scope"),
+                   "measured_at": b.get("measured_at")},
+        "commit": None,
+        "exported_at": None,
+        "error": None,
+        "note": (f"Neither the registry ({why}) nor models/champion.json is here, "
+                 f"so this is eval/baselines/xg.json — what the shipped artefact "
+                 f"scored on the held-out competitions, committed to the repo. "
+                 f"Which registry version is serving is not something it knows."),
+    }
 
 
 # --- 4. drift -----------------------------------------------------------------
