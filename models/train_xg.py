@@ -328,6 +328,11 @@ def main():
                 tracking.MODEL_NAME, mlrun.run_id, "model",
                 metric="log_loss", value=m_mine["log_loss"])
             print(tracking.describe_promotion(promotion))
+            # The hosted API has no registry to ask, so the answer goes into a
+            # file that ships with the repo. After the alias move, so it
+            # describes the champion this run left behind and not the one it
+            # found.
+            print(tracking.describe_export(tracking.export_champion()))
 
     print(f"held-out log-loss {m_mine['log_loss']:.4f} "
           f"(baseline {m_base['log_loss']:.4f}, StatsBomb {m_sb['log_loss']:.4f})")

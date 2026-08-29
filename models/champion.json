@@ -1,0 +1,41 @@
+{
+  "model": "pitchquery-xg",
+  "alias": "champion",
+  "version": "1",
+  "run_id": "e283c8aae8b04afa934d1307790c35b1",
+  "metrics": {
+    "auc": 0.7929848484848485,
+    "baseline_log_loss": 0.28113851823656505,
+    "brier": 0.07265697674479958,
+    "cv_log_loss": 0.2774761735623887,
+    "ece": 0.014534296106950858,
+    "gap_closed": 0.7586465406812216,
+    "log_loss": 0.258055916688501,
+    "logloss_gap_to_statsbomb": 0.007343427320843976,
+    "observed_over_expected": 0.968632574402127,
+    "statsbomb_log_loss": 0.250712489367657
+  },
+  "params": {
+    "calibration": "sigmoid",
+    "lgbm_colsample_bytree": "0.9",
+    "lgbm_learning_rate": "0.05",
+    "lgbm_min_child_samples": "60",
+    "lgbm_n_estimators": "300",
+    "lgbm_num_leaves": "15",
+    "lgbm_reg_lambda": "5.0",
+    "lgbm_subsample": "0.9",
+    "n_features": "12",
+    "n_test_shots": "3038",
+    "n_train_shots": "7820",
+    "seed": "42",
+    "test_comps": "43:106,72:107"
+  },
+  "tags": {
+    "corpus_rows": "10858",
+    "feature_source": "analytics.mart_xg_features",
+    "git_commit": "f8f1138-dirty",
+    "lightgbm": "4.7.0"
+  },
+  "exported_at": "2026-08-29T08:31:16+00:00",
+  "exported_at_commit": "f8125ca-dirty"
+}

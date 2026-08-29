@@ -262,8 +262,16 @@ reading one cached `/ops` call. It was a Streamlit page, which meant a second
 framework, a second host and a second thing to keep alive — and it looked
 nothing like the product it reported on. Each of its five panels still degrades
 on its own and now says *why*, which matters because the hosted deployment
-genuinely cannot answer three of them: `ingest_watermark` and the dbt schemas
-never ship to Neon, and MLflow is a SQLite file on a laptop.
+cannot answer all of it from the database in front of it: `ingest_watermark` and
+the dbt schemas never ship to Neon.
+
+The champion panel used to be a third such gap. MLflow is a SQLite file on a
+laptop and putting it on the hosted box would not help — there would still be no
+store there to read — so `models/tracking.py` exports what the registry says the
+moment the `champion` alias moves, and `models/champion.json` is committed
+beside the artefact it describes. The same trade already made for the model
+itself. The hosted page reports the real version, run and metrics, and labels
+them *exported* rather than implying a live read.
 
 ```powershell
 pip install -r requirements-pipeline.txt

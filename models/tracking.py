@@ -22,9 +22,11 @@ Run the UI:
                 --default-artifact-root ./mlruns --host 127.0.0.1 --port 5000
 """
 import contextlib
+import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -37,6 +39,10 @@ CHAMPION = "champion"
 # sqlite:/// wants a POSIX-ish path even on Windows, and an absolute one so that
 # the store does not follow the working directory around.
 DEFAULT_URI = "sqlite:///" + (REPO_ROOT / "mlflow.db").as_posix()
+
+# What the registry says about the champion, committed next to the model it
+# describes. See export_champion().
+CHAMPION_SNAPSHOT = REPO_ROOT / "models" / "champion.json"
 
 
 def tracking_uri() -> str:
@@ -222,3 +228,97 @@ def describe_promotion(result: dict) -> str:
                 f"({m} {new:.4f}, {was})")
     return (f"registry: version {result['version']} logged but NOT promoted "
             f"({m} {new:.4f} vs champion {old:.4f}) — the champion stands")
+
+
+# --- the registry, for machines that do not have it ---------------------------
+
+def export_champion(model_name: str = MODEL_NAME,
+                    path: Path = CHAMPION_SNAPSHOT) -> dict:
+    """Write what the registry says about the champion to a committed JSON file.
+
+    The registry is a SQLite file and a folder of artefacts on one machine. The
+    hosted API has neither, and installing mlflow beside it would not help —
+    there would still be no store to read, and mlflow is a heavier dependency
+    than everything the API serves put together.
+
+    So the registry's answer is exported when it changes and committed alongside
+    the model it describes. Exactly the trade already made for the model itself:
+    models/xg_portable.json.gz ships as LightGBM text rather than as a pickle
+    that pins scikit-learn to whatever a laptop had. This is the same idea
+    applied to the provenance — which version, which run, which commit, which
+    metrics — so the hosted page reports the real champion instead of inferring
+    one, while the registry stays a local SQLite file that costs nothing.
+
+    Never raises. A failed export is a stale file, and a training run that
+    completed is not a training run that failed.
+    """
+    if not available():
+        return {"exported": False, "reason": "mlflow is not installed"}
+    try:
+        client = _client()
+        version = client.get_model_version_by_alias(model_name, CHAMPION)
+        run = client.get_run(version.run_id)
+    except Exception as exc:
+        return {"exported": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+    doc = {
+        "model": model_name,
+        "alias": CHAMPION,
+        "version": str(version.version),
+        "run_id": version.run_id,
+        # Sorted, so that re-exporting an unchanged champion produces a file
+        # identical to the one already committed rather than a reordered diff.
+        "metrics": dict(sorted(run.data.metrics.items())),
+        "params": dict(sorted(run.data.params.items())),
+        # mlflow.* tags are the tracker describing itself — the user, the source
+        # file, the local path it ran from. None of that belongs in a committed
+        # file, least of all the path.
+        "tags": {k: v for k, v in sorted(run.data.tags.items())
+                 if not k.startswith("mlflow.")},
+        "exported_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "exported_at_commit": git_commit(),
+    }
+
+    # The timestamp changes on every run; the champion does not. Comparing
+    # everything else first means training a model that loses to the incumbent
+    # leaves this file untouched instead of putting a one-line diff in the
+    # commit that says nothing happened.
+    volatile = ("exported_at", "exported_at_commit")
+    if path.exists():
+        try:
+            old_doc = json.loads(path.read_text(encoding="utf-8"))
+            if ({k: v for k, v in old_doc.items() if k not in volatile}
+                    == {k: v for k, v in doc.items() if k not in volatile}):
+                return {"exported": False, "unchanged": True,
+                        "version": doc["version"], "path": path}
+        except Exception:
+            pass                                   # unreadable: overwrite it
+
+    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    return {"exported": True, "version": doc["version"], "path": path}
+
+
+def describe_export(result: dict) -> str:
+    """One line for the training log."""
+    if result.get("unchanged"):
+        return (f"champion snapshot: unchanged (v{result['version']}) — "
+                f"{CHAMPION_SNAPSHOT.name} not rewritten")
+    if not result.get("exported"):
+        return f"champion snapshot: not written ({result.get('reason', 'unknown')})"
+    return (f"champion snapshot: v{result['version']} written to "
+            f"{result['path'].relative_to(REPO_ROOT).as_posix()} — commit it, "
+            f"it is what the hosted /ops reads")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--export", action="store_true",
+                    help="write models/champion.json from the local registry")
+    ap.add_argument("--model", default=MODEL_NAME)
+    args = ap.parse_args()
+    if args.export:
+        print(describe_export(export_champion(args.model)))
+    else:
+        ap.print_help()

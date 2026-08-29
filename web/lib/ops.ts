@@ -27,12 +27,22 @@ export type LayerRow = {
 };
 
 export type Champion = {
-  /** "mlflow" when the registry answered, "baseline" for the committed JSON. */
-  source: "mlflow" | "baseline" | null;
+  /**
+   * Which of the three sources answered — the page says so rather than letting
+   * a committed file read as a live registry.
+   *
+   *   "mlflow"   the local SQLite registry, read live
+   *   "snapshot" models/champion.json, its answer exported when the champion
+   *              last changed and committed
+   *   "baseline" eval/baselines/xg.json, what the shipped artefact scored
+   */
+  source: "mlflow" | "snapshot" | "baseline" | null;
   version: string | null;
   metrics: Record<string, number | null>;
   params: Record<string, string | number | null>;
   commit?: string | null;
+  /** When the snapshot was written. Null for the other two sources. */
+  exported_at?: string | null;
   note?: string;
   error: string | null;
 };
