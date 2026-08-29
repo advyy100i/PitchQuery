@@ -215,7 +215,9 @@ Is the pipeline healthy? Five checks: what loaded, what dbt
                           <td className="mono">{t.table}</td>
                           <td className="num">
                             {t.rows === null
-                              ? <span className="muted">not built</span>
+                              ? t.state === "unavailable"
+                                ? <span className="muted" title="This model reads the raw event JSONB, which this database does not have">n/a here</span>
+                                : <span className="muted" title="Nobody has run dbt build against this database yet">not built</span>
                               : <>{t.estimated && <span className="muted" title="Counting every row took longer than 3 seconds, so this is Postgres's own estimate">≈ </span>}{int(t.rows)}</>}
                           </td>
                         </tr>
@@ -225,7 +227,13 @@ Is the pipeline healthy? Five checks: what loaded, what dbt
                 </div>
               ))}
             </div>
-            <Hint text={data.layers.hint} />
+            {/* Two hints, not one joined string: "nobody has built this" and
+                "this cannot be built here" are different problems with
+                different answers, and running them together is what made the
+                panel unhelpful. */}
+            {(data.layers.hints ?? [data.layers.hint]).map((h, i) => (
+              <Hint key={i} text={h} />
+            ))}
           </Panel>
 
           <Panel

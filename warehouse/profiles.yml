@@ -23,5 +23,6 @@ pitchquery:
       # dbt builds lands here instead, so `drop schema analytics cascade` can
       # never take the corpus with it.
       schema: "{{ env_var('PGSCHEMA', 'analytics') }}"
+      sslmode: "{{ env_var('PGSSLMODE', 'prefer') }}"
       threads: 4
       connect_timeout: 10

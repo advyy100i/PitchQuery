@@ -40,16 +40,25 @@ _cache: dict = {}
 
 # Bronze is written by Python, silver and gold by dbt. Ordered as the data flows
 # so that a gold table lagging bronze is visible as a step that did not happen.
+#
+# The last field is whether the model reads `events.raw`. Two of them do, and
+# that is the difference between a table nobody has built yet and a table that
+# cannot exist in this database: stg_events unpacks pass, shot, duel and dribble
+# qualifiers out of that JSONB, and mart_team_possessions counts crosses and
+# through balls from stg_events. deploy/export_to_neon.py leaves the JSONB
+# behind — it is the 3.3 GB that keeps the hosted copy at 424 MB — so telling
+# someone out there to run `dbt build` would be sending them after a column that
+# is not coming.
 LAYERS = [
-    ("bronze", "matches", "public.matches"),
-    ("bronze", "events", "public.events"),
-    ("bronze", "shots", "public.shots"),
-    ("bronze", "possessions", "public.possessions"),
-    ("silver", "stg_events", "analytics.stg_events"),
-    ("silver", "stg_shots", "analytics.stg_shots"),
-    ("silver", "stg_freeze_frames", "analytics.stg_freeze_frames"),
-    ("gold", "mart_xg_features", "analytics.mart_xg_features"),
-    ("gold", "mart_team_possessions", "analytics.mart_team_possessions"),
+    ("bronze", "matches", "public.matches", False),
+    ("bronze", "events", "public.events", False),
+    ("bronze", "shots", "public.shots", False),
+    ("bronze", "possessions", "public.possessions", False),
+    ("silver", "stg_events", "analytics.stg_events", True),
+    ("silver", "stg_shots", "analytics.stg_shots", False),
+    ("silver", "stg_freeze_frames", "analytics.stg_freeze_frames", False),
+    ("gold", "mart_xg_features", "analytics.mart_xg_features", False),
+    ("gold", "mart_team_possessions", "analytics.mart_team_possessions", True),
 ]
 
 # A ceiling on what one row count is allowed to cost. `events` is several
@@ -93,10 +102,12 @@ def pipeline(conn) -> dict:
         """)
     except psycopg.Error as exc:
         return {"runs": [], "error": str(exc).strip(),
-                "hint": "ingest_watermark is not in this database. It is written "
-                        "by the loader and does not ship to the hosted copy — "
-                        "deploy/export_to_neon.py sends matches, events, shots "
-                        "and possessions only."}
+                "hint": "There is no ingest_watermark table here. It does ship "
+                        "to a hosted copy, so this database was made before it "
+                        "did — re-run `python deploy/export_to_neon.py --target "
+                        "<url>`. It is skipped on purpose when that runs with "
+                        "--matches, because it would describe a fuller load "
+                        "than a subset holds."}
     for r in runs:
         r["last_run_at"] = _iso(r["last_run_at"])
         r["rows_loaded"] = int(r["rows_loaded"] or 0)
@@ -138,16 +149,44 @@ def _count(conn, table: str) -> dict:
             cur.execute("RESET statement_timeout")
 
 
+def _has_raw_events(conn) -> bool:
+    """Whether this database kept the raw event JSONB."""
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = 'events'
+              AND column_name = 'raw'
+        """)
+        return cur.fetchone() is not None
+
+
 def layers(conn) -> dict:
+    raw = _has_raw_events(conn)
     tables = []
-    for layer, name, table in LAYERS:
-        tables.append({"layer": layer, "table": name, "qualified": table,
-                       **_count(conn, table)})
+    for layer, name, table, needs_raw in LAYERS:
+        row = {"layer": layer, "table": name, "qualified": table,
+               **_count(conn, table)}
+        # Two different facts, and running them together is what made this
+        # panel unhelpful: one is a step nobody has run, the other is a step
+        # that cannot be run here.
+        if row["state"] == "missing" and needs_raw and not raw:
+            row["state"] = "unavailable"
+        tables.append(row)
+
     missing = [t["table"] for t in tables if t["state"] == "missing"]
-    return {"tables": tables,
-            "hint": (f"Not built here: {', '.join(missing)}. The dbt layers are "
-                     f"built locally — `cd warehouse && dbt build --profiles-dir .`")
-                    if missing else None}
+    blocked = [t["table"] for t in tables if t["state"] == "unavailable"]
+    hints = []
+    if missing:
+        hints.append(f"Not built yet: {', '.join(missing)}. Build them with "
+                     f"`cd warehouse && dbt build --profiles-dir .` — or, against "
+                     f"a hosted copy, `python deploy/export_to_neon.py "
+                     f"--target <url> --dbt`.")
+    if blocked:
+        hints.append(f"{' and '.join(blocked)} cannot be built here. They read "
+                     f"the raw event JSONB, and this database does not have it: "
+                     f"leaving it behind is what takes the copy from 3.7 GB to "
+                     f"424 MB, so it is a trade rather than a gap.")
+    return {"tables": tables, "hints": hints, "hint": hints[0] if hints else None}
 
 
 # --- 3. the champion model ----------------------------------------------------

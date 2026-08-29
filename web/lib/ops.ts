@@ -22,8 +22,12 @@ export type LayerRow = {
   rows: number | null;
   /** True when count(*) hit the 3 s ceiling and this is the planner's estimate. */
   estimated: boolean;
-  /** "ok", "missing", or the database's own message. */
-  state: string;
+  /**
+   * "ok"; "missing" (nobody has built it); "unavailable" (it cannot exist in
+   * this database — it reads the raw event JSONB, which the hosted copy drops);
+   * or the database's own message.
+   */
+  state: "ok" | "missing" | "unavailable" | string;
 };
 
 export type Champion = {
@@ -84,7 +88,8 @@ export type Ops = {
   generated_at: string;
   cache_ttl_s: number;
   pipeline: { runs: PipelineRun[]; error: string | null; hint: string | null };
-  layers: { tables: LayerRow[]; hint: string | null };
+  /** `hints` may hold two: one for what is unbuilt, one for what cannot be built. */
+  layers: { tables: LayerRow[]; hints: string[]; hint: string | null };
   champion: Champion;
   drift: { reports: DriftReport[]; hint: string | null };
   queries: {

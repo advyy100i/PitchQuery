@@ -97,3 +97,18 @@ CREATE TABLE IF NOT EXISTS possessions (
   xg_sum          REAL,
   ended_in_goal   BOOLEAN
 );
+
+-- How far the loader got, per competition. Two rows and a few dozen bytes, and
+-- without it the whole Ingest panel on /pipeline reads as absent when what it
+-- actually describes — which matches are in here — is the one thing a copy of
+-- the corpus should be able to say about itself.
+--
+-- Kept in step with sql/003_watermark.sql, which is what creates it locally.
+CREATE TABLE IF NOT EXISTS ingest_watermark (
+  competition_id INT,
+  season_id      INT,
+  last_match_id  BIGINT,
+  last_run_at    TIMESTAMPTZ,
+  rows_loaded    BIGINT,
+  PRIMARY KEY (competition_id, season_id)
+);

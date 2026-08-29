@@ -13,6 +13,11 @@
 -- `n_def_in_cone <= n_opponents_in_frame` test compares the Python answer
 -- against — a mirroring bug or a bad parse breaks that inequality immediately.
 
+-- Tagged `hosted`: this model reads only columns that survive the trip to the
+-- deployed database, so `dbt build --select tag:hosted` can build it there. See
+-- deploy/export_to_neon.py --dbt.
+{{ config(tags=['hosted']) }}
+
 with frame as (
 
     select

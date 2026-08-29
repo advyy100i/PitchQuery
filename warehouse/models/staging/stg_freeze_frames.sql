@@ -10,7 +10,9 @@
 -- Materialised as a table (~200k rows): unnesting 11k JSONB arrays on every
 -- select is the one JSONB cost in this warehouse worth paying once.
 
-{{ config(materialized='table') }}
+-- Tagged `hosted`: it reads shots.freeze_frame, which does ship. See
+-- deploy/export_to_neon.py --dbt.
+{{ config(materialized='table', tags=['hosted']) }}
 
 select
     s.event_id                                  as shot_id,

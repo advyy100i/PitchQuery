@@ -12,6 +12,11 @@
 --     for comparison only, and mart_xg_features passes it through under a name
 --     that says so.
 
+-- Tagged `hosted`: this model reads only columns that survive the trip to the
+-- deployed database, so `dbt build --select tag:hosted` can build it there. See
+-- deploy/export_to_neon.py --dbt.
+{{ config(tags=['hosted']) }}
+
 select
     s.event_id      as shot_id,
     s.match_id,

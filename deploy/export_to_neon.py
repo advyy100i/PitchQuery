@@ -12,11 +12,18 @@ Run (target is any Postgres URL — Neon, Supabase, a VM):
   python deploy/export_to_neon.py --target "postgresql://user:pw@host/db?sslmode=require"
   python deploy/export_to_neon.py --target "..." --matches 150   # smaller demo
   python deploy/export_to_neon.py --target "..." --dry-run       # just size it
+  python deploy/export_to_neon.py --target "..." --dbt            # + the dbt layers
+
+`--dbt` builds the three models that can exist on a copy without the raw event
+JSONB — see build_dbt() for which two cannot, and why.
 """
 import argparse
+import os
+import subprocess
 import sys
 import time
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import psycopg  # noqa: E402
@@ -24,6 +31,7 @@ import psycopg  # noqa: E402
 from core import db  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
+REPO_ROOT = HERE.parent
 
 # Column lists are explicit. `SELECT *` here would silently start shipping the
 # raw JSONB again the moment anyone adds it back to the source schema.
@@ -42,7 +50,15 @@ TABLES = [
     ("events", """event_id, match_id, idx, period, minute, second, type,
                   play_pattern, possession, possession_team, team, player,
                   position, x, y, end_x, end_y, under_pressure, duration, token"""),
+    ("ingest_watermark", """competition_id, season_id, last_match_id, last_run_at,
+                            rows_loaded"""),
 ]
+
+# Tables with no match_id, so the --matches filter cannot apply to them. The
+# watermark is also the one table --matches makes untrue: it records how far the
+# loader got locally, and a copy of the 150 most recent matches did not get
+# there. Shipped whole or not at all — see main().
+NO_MATCH_FILTER = {"ingest_watermark"}
 
 # Only what the API actually queries. The GIN and HNSW indexes are for features
 # that do not ship, and every index costs storage on a tier measured in MB.
@@ -52,6 +68,47 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS possessions_pattern ON possessions (play_pattern)",
     "CREATE INDEX IF NOT EXISTS possessions_shot ON possessions (ended_in_shot)",
 ]
+
+
+def build_dbt(target: str) -> int:
+    """Build the dbt models the hosted copy can actually support.
+
+    Three of the five can. stg_shots is a view over columns that ship,
+    stg_freeze_frames unnests shots.freeze_frame which also ships, and
+    mart_xg_features is built from those two — about 20 MB all told, two small
+    tables and a view, against a tier measured in hundreds.
+
+    Two of them cannot, and no configuration changes that. stg_events unpacks
+    pass, shot, duel and dribble qualifiers out of `events.raw`, and
+    mart_team_possessions counts crosses and through balls from stg_events. That
+    JSONB is exactly what this script leaves behind: shipping it is the 3.3 GB
+    that takes the deployed database from 424 MB to over 3.7 GB, against a
+    500 MB free tier. /ops reports those two as unavailable there rather than as
+    not built, because "run dbt" is not the fix and saying so wastes an
+    afternoon.
+
+    Which models are hostable is a tag on the models themselves, not a list
+    here, so a new model declares it next to the SQL that decides it.
+    """
+    u = urlparse(target)
+    env = {
+        **os.environ,
+        "PGHOST": u.hostname or "",
+        "PGPORT": str(u.port or 5432),
+        "PGUSER": unquote(u.username or ""),
+        "PGPASSWORD": unquote(u.password or ""),
+        "PGDATABASE": (u.path or "/").lstrip("/"),
+        # Neon closes the connection without TLS. `prefer`, the libpq default
+        # the profile falls back to, would silently accept a plaintext target.
+        "PGSSLMODE": "require",
+    }
+    cmd = ["dbt", "build", "--select", "tag:hosted", "--profiles-dir", "."]
+    print(f"\n  dbt: {' '.join(cmd)}  (against {u.hostname})")
+    try:
+        return subprocess.run(cmd, cwd=REPO_ROOT / "warehouse", env=env).returncode
+    except FileNotFoundError:
+        print("  dbt is not installed — pip install -r requirements-pipeline.txt")
+        return 1
 
 
 def match_filter(conn, limit):
@@ -65,10 +122,15 @@ def match_filter(conn, limit):
 
 
 def where_for(table, ids):
-    if ids is None:
+    if ids is None or table in NO_MATCH_FILTER:
         return ""
-    col = "match_id"
-    return f" WHERE {col} = ANY(%s)" if table != "matches" else " WHERE match_id = ANY(%s)"
+    return " WHERE match_id = ANY(%s)"
+
+
+def params_for(table, ids):
+    """psycopg rejects parameters for a statement that has no placeholder, so
+    the filter and its argument have to be decided together."""
+    return (ids,) if where_for(table, ids) else None
 
 
 def main():
@@ -77,18 +139,31 @@ def main():
     ap.add_argument("--matches", type=int, default=None,
                     help="ship only the N most recent matches (default: all)")
     ap.add_argument("--dry-run", action="store_true", help="report sizes, copy nothing")
+    ap.add_argument("--dbt", action="store_true",
+                    help="also build the dbt models the hosted copy can support "
+                         "(stg_shots, stg_freeze_frames, mart_xg_features)")
     args = ap.parse_args()
 
     src = db.connect()
     ids = match_filter(src, args.matches)
     scope = f"{len(ids)} matches" if ids else "all matches"
 
+    tables = TABLES
+    if ids:
+        # The watermark says the loader reached match X. Ship it beside a subset
+        # that stops short of X and the Ingest panel reports rows that are not
+        # in the database it is describing — which is worse than the panel
+        # saying it has nothing to report.
+        tables = [t for t in TABLES if t[0] not in NO_MATCH_FILTER]
+        print("note: --matches is set, so ingest_watermark is not shipped — it "
+              "would describe a fuller load than this copy holds")
+
     print(f"source: {db.database_url().rsplit('@', 1)[-1]}  ({scope})")
     total = 0
-    for table, cols in TABLES:
+    for table, cols in tables:
         with src.cursor() as cur:
             cur.execute(f"SELECT count(*) FROM {table}{where_for(table, ids)}",
-                        (ids,) if ids else None)
+                        params_for(table, ids))
             n = cur.fetchone()[0]
         print(f"  {table:12} {n:>10,} rows")
         total += n
@@ -105,7 +180,7 @@ def main():
         dst.commit()
         print("  schema applied")
 
-        for table, cols in TABLES:
+        for table, cols in tables:
             t0 = time.time()
             with dst.cursor() as out:
                 # Truncate so the script is re-runnable without duplicate keys.
@@ -114,7 +189,7 @@ def main():
                 query = f"COPY (SELECT {flat} FROM {table}{where_for(table, ids)}) TO STDOUT (FORMAT BINARY)"
                 with src.cursor() as inp, \
                         out.copy(f"COPY {table} ({flat}) FROM STDIN (FORMAT BINARY)") as writer:
-                    with inp.copy(query, (ids,) if ids else None) as reader:
+                    with inp.copy(query, params_for(table, ids)) as reader:
                         for block in reader:
                             writer.write(block)
             dst.commit()
@@ -131,6 +206,17 @@ def main():
             cur.execute("SELECT pg_size_pretty(pg_database_size(current_database()))")
             size = cur.fetchone()[0]
     print(f"\ndone — hosted database is {size}")
+    if args.dbt:
+        if build_dbt(args.target) != 0:
+            print("  dbt build failed — the bronze tables are copied either way")
+        else:
+            with psycopg.connect(args.target) as dst, dst.cursor() as cur:
+                cur.execute("SELECT pg_size_pretty(pg_database_size(current_database()))")
+                print(f"  with the dbt layers: {cur.fetchone()[0]}")
+    else:
+        print("Add --dbt to build stg_shots, stg_freeze_frames and "
+              "mart_xg_features there too.")
+
     print("Set DATABASE_URL on the API host to the target URL.")
 
 
