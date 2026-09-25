@@ -3,7 +3,9 @@
 **Search 66,817 football possessions by what happened in them.** Describe a
 passage of play in English — or draw its shape on a pitch — and get back ranked,
 animated clips, with a scouting note whose every claim links to the clips it was
-computed from.
+computed from. Behind it: an incremental ETL pipeline that turns 431 raw
+StatsBomb match files into that searchable corpus, and a metric gate that blocks
+a pull request which makes retrieval worse.
 
 Live Link: **[pitch-query.vercel.app](https://pitch-query.vercel.app)** 
 
@@ -46,10 +48,11 @@ pressure. That string is what gets indexed, ranked and searched.
 
 | | | how it was measured |
 |---|---|---|
-| **Retrieval** | P@5 **0.608**, MRR 0.751, p50 36 ms / p95 123 ms | 30 queries, relevance from per-query rubrics written *before* any results were seen; **87% agreement** with a human on a blind 71-item audit |
+| **Retrieval** | P@5 **0.608**, MRR 0.750, p50 48 ms / p95 124 ms | 30 queries, relevance from per-query rubrics written *before* any results were seen; **87% agreement** with a human on a blind 71-item audit |
 | **xG model** | closes **76%** of the log-loss gap to StatsBomb's production model, and is live in the demo | held out the 2022 World Cup and 2023 Women's World Cup entirely; split by competition, never by shot |
 | **Query parsing** | **1 ms**, no LLM, no API key | 24/30 filter agreement with hand-written queries, and it holds on a held-out paraphrase set |
 | **Learned ranker** | NDCG@10 **0.540** against **0.407** for fixed reciprocal rank fusion | leave-one-query-out over 30 queries — a real gain whose 95% interval (±0.090) barely excludes zero, so read it as a direction, not a measurement |
+| **ETL pipeline** | 1.6M events over 431 matches, incremental — the second run loads **0** | one Prefect flow, watermark advanced in the insert's own transaction; Pandera contracts on every batch, 5 dbt models and 49 tests between the Python steps |
 | **Metric gate** | a pull request that makes retrieval worse **cannot be merged** | GitHub Actions loads a committed 40k-possession fixture, reruns both evals and posts old/new/delta as a PR comment |
 
 Full write-ups: [retrieval](docs/retrieval_eval.md) ·
@@ -70,6 +73,114 @@ results.
 
 ---
 
+## The ETL pipeline
+
+The corpus is not a download. 431 match files become 1,603,663 typed events,
+11,185 shots and 66,817 searchable possessions through a six-stage flow that
+runs as one command, and that can be rerun at any point without changing a row.
+
+```
+fetch   ->  load raw   ->  dbt staging  ->  possessions  ->  dbt marts  ->  index
+(Python)    (Python)       (SQL)            (Python)         (SQL)         (Python)
+   |           |              |                 |               |             |
+ cache to   upsert +       typed views      tokenise +      the table the   TF-IDF
+ disk       watermark      + tests          contract        trainer reads   (+ MiniLM)
+```
+
+| stage | what it does | what stops it going wrong |
+|---|---|---|
+| `02_fetch` | downloads only the matches past the watermark, caches them to disk | 3 retries, 30 s apart |
+| `03_load_events` | upserts events keyed on the StatsBomb `id` | `EventSchema`, then the watermark advances *in the same transaction* |
+| `stg_events`, `stg_shots`, `stg_freeze_frames` | types the JSONB, unpacks pass/shot/duel qualifiers, one row per player per shot | dbt tests — uniqueness, not-null, accepted values, ranges, relationships |
+| `04_build_possessions` | groups events into possessions and writes one token string each | `PossessionSchema`, whose token regex is *generated from* `core/zones.py` |
+| `mart_xg_features`, `mart_team_possessions` | the exact table `models/train_xg.py` reads, plus per-team aggregates | the same `dbt build` — models and tests in one command |
+| `05_embed` | refits TF-IDF over the whole corpus | skipped entirely when nothing was rebuilt |
+
+`dbt build` runs **5 models and 49 tests**, and the flow runs it twice — once
+after the raw load and once after possessions — so a broken assumption fails
+between two Python steps rather than in the index at the end.
+
+### Steps pass data, not exit codes.
+
+`pipeline/flows.py` imports the numbered `ingest/` scripts and calls them; it
+does not shell out to them. `subprocess.run` can return an exit code and nothing
+else, so every step would have to re-derive what the previous one already knew —
+which matches were fetched, which of them actually landed. Instead `fetch` hands
+the loader a list of match ids and the loader hands the possession builder the
+subset that committed. That is the difference between a pipeline and a shell
+script with a UI in front of it.
+
+### The watermark moves inside the write.
+
+`pipeline/watermark.py` keeps a high-water mark per competition/season, and
+`advance()` takes a **cursor, not a connection** — so the caller runs it on the
+same transaction as the inserts. A load that dies halfway rolls the mark back
+along with the rows it described, and the next run redoes exactly the matches
+that did not land. The fetch step filters on that mark, so skipped work is
+skipped *before* it is done: an incremental load that still downloads and parses
+every match and then upserts it away is not incremental, it is just quiet.
+
+The observable consequence is the one worth checking: **the second run of the
+flow loads 0 events.** Adding one competition costs one competition, not 1.6M
+rows.
+
+### Contracts cover the gap dbt tests cannot see.
+
+dbt tests run against tables that are already in the warehouse. The Pandera
+schemas in `pipeline/contracts.py` run against the dataframes in between — the
+window where a bad coordinate or a malformed token is still in Python and has
+not yet become 1.6M committed rows. Every call site passes `lazy=True`, so a bad
+batch reports every offending column at once instead of stopping at the first.
+
+The strictest of them is the token grammar, built from `core.zones` rather than
+typed out, so the vocabulary the writer emits and the vocabulary the validator
+accepts cannot drift apart:
+
+```python
+TOKEN_RE = (r"(?:" + "|".join(ACTIONS) + r")@(?:"
+            + "|".join(z.replace("-", r"\-") for z in _ZONES) + r")\+?>?\^?")
+```
+
+A possession that fails it would not raise anywhere downstream. It would simply
+never match a query — 14 actions x 15 zones x 8 modifier combinations is a
+closed vocabulary, and something outside it is invisible rather than wrong. The
+same reasoning makes `ALLOWED_TYPES` a closed set: StatsBomb adding an event
+type should fail the run, because `core/zones.py` has to decide whether it is a
+token, a set piece or noise.
+
+### SQL owns sets, Python owns sequences.
+
+dbt owns the typed, tested layers. Possession tokenising stays in Python because
+it is sequence logic over ordered events, not set logic over rows, and rewriting
+it as SQL would be a worse version of the same thing. The boundary is drawn
+where the work changes shape, not where the tool list says it should be.
+
+### What the tests caught.
+
+Three dbt range tests failed on real football rather than on bad data: 93-yard
+shots, a goalkeeper 81 yards upfield, and shots struck from on the goal line
+that come back at `x = 120.5`. The bounds carry a `PITCH_MARGIN` slack for that
+last one — documented in `core/config.py`, because a coordinate two feet past
+the touchline is a real event and a coordinate at `x = 4000` is not.
+
+`assert_cone_within_frame` is the one test in the warehouse that checks Python
+against SQL rather than data against a range, and it is the one worth having. A
+defender inside the shooting cone is by definition an opponent visible in the
+freeze frame, so the Python count can never exceed SQL's count of the same
+frame. Every past bug in that area has been a frame that was not mirrored with
+the event it belongs to — which passes every range test, because the players are
+all still on the pitch, and fails this one immediately.
+
+### The nightly flow is separate on purpose.
+
+`python -m pipeline.flows --nightly` reads what the last day produced — the
+query log, the feature distributions — and neither of its tasks can change the
+corpus. So a failure there is a missing report, not a pipeline that has to be
+rerun. It collects searches whose opened result ranked 5 or worse into an eval
+backlog, and re-measures drift.
+
+---
+
 ## Four decisions worth explaining
 
 ### The dense ranker was supposed to lose. It didn't.
@@ -81,8 +192,8 @@ right:
 | ranker | P@5 | P@10 | MRR |
 |---|--:|--:|--:|
 | sparse (TF-IDF n-grams) | 0.544 | **0.540** | **0.671** |
-| dense (MiniLM + pgvector) | **0.584** | 0.516 | 0.638 |
-| **fused (RRF)** | **0.608** | **0.600** | **0.751** |
+| dense (MiniLM + pgvector) | **0.560** | 0.512 | 0.628 |
+| **fused (RRF)** | **0.608** | **0.584** | **0.750** |
 
 Sparse ranks its best hit higher; dense wins on P@5. They agree on only **1 of
 their top 10** results for a typical query — which is exactly why fusing them
@@ -236,6 +347,11 @@ cd web; npm install; npm run dev         # http://localhost:3000
                                          # and :3000/pipeline for the ops view
 ```
 
+Those four scripts are the stages of [the ETL pipeline](#the-etl-pipeline)
+run by hand. `python -m pipeline.flows` runs the same six stages as one
+orchestrated flow, with the retries, the watermark and the dbt layers in
+between — see [the platform layer](#the-platform-layer) below.
+
 Every command in one place: [`RUN.txt`](RUN.txt).
 
 Reproduce the numbers:
@@ -276,9 +392,8 @@ them *exported* rather than implying a live read.
 ```powershell
 pip install -r requirements-pipeline.txt
 
-# Phases 1-4 — the whole ingest as one flow: retries, an incremental watermark,
-# dbt models and tests between the Python steps, Pandera contracts on every
-# batch before it is written.
+# Phases 1-4 — the whole ingest as one flow. What it does and why it is in
+# this order: "The ETL pipeline" above.
 prefect server start                        # terminal 1, UI on :4200
 python -m pipeline.flows                    # terminal 2
 python -m pipeline.flows --comp 43:106      # or one competition
